@@ -767,6 +767,11 @@ var handlerDecidesRoutes = []struct {
 			"HandlePrivacyErase asks refuseReadOnly before anything is erased, so an editor without the " +
 			"publishing right is refused with the read-only sentence, and it ignores the account box for " +
 			"anybody who is not an administrator (Phase 33.2, D-09)"},
+	{"POST /admin/websites/{id}/datenschutz/berichtigen",
+		"correcting a person's record changes stored data: HandlePrivacyCorrect asks refuseReadOnly " +
+			"before anything is changed, so an editor without the publishing right is refused with the " +
+			"read-only sentence and never with a 403, and the Privacy screen shows the forms only to " +
+			"somebody who may publish (Phase 33.2, DSR-02)"},
 }
 
 // adminRoutesInSource reads the patterns straight out of newRouter.

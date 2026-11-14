@@ -76,6 +76,14 @@ type privacyPersonData struct {
 	// EraseURL is the erasure page of the address, with the request the
 	// search came from.
 	EraseURL string
+	// MayCorrect is true for somebody with the publishing right: only they
+	// are shown the correction forms.
+	MayCorrect bool
+	// CorrectURL is where the correction forms post.
+	CorrectURL string
+	// RequestID is the request the search came from, 0 for none; the
+	// correction forms carry it back.
+	RequestID int64
 }
 
 // privacyGroup is the records of one source.
@@ -93,6 +101,8 @@ type privacyRecordView struct {
 	// Shown are the fields that hold a value: an empty company is not
 	// information the operator needs to read. The export carries them all.
 	Shown []dsr.Field
+	// Correct are the fields the operator may correct (dsr.Correctable).
+	Correct []dsr.CorrectableField
 }
 
 // privacyAddress is the screen of one website.
@@ -161,7 +171,7 @@ func privacyGroups(res *dsr.Result, loc *time.Location) []privacyGroup {
 			if !rec.Time.IsZero() {
 				rec.Time = rec.Time.In(loc)
 			}
-			view := privacyRecordView{Record: rec}
+			view := privacyRecordView{Record: rec, Correct: dsr.Correctable(rec)}
 			for _, f := range rec.Fields {
 				if f.Value == "" {
 					continue
@@ -219,7 +229,10 @@ func (h *Handler) HandlePrivacyPerson(w http.ResponseWriter, r *http.Request) er
 		}
 		data.ExportURL = privacyAddress(ws.ID) + "/export.json?email=" + url.QueryEscape(res.Email)
 		requestID, _ := strconv.ParseInt(r.URL.Query().Get("anfrage"), 10, 64)
-		data.EraseURL = privacyEraseAddress(ws.ID) + "?" + eraseQuery(res.Email, max(requestID, 0))
+		data.RequestID = max(requestID, 0)
+		data.EraseURL = privacyEraseAddress(ws.ID) + "?" + eraseQuery(res.Email, data.RequestID)
+		data.MayCorrect = !h.readOnly(r)
+		data.CorrectURL = privacyCorrectAddress(ws.ID)
 	}
 	return web.RenderAdmin(w, h.templates, r, "privacy_person", data)
 }

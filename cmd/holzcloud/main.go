@@ -1229,6 +1229,10 @@ func newRouter(d routerDeps) (http.Handler, error) {
 	adminProtectedMux.Handle("GET /admin/websites/{id}/datenschutz/loeschen", requireFresh(http.HandlerFunc(adminHandler.ErrHandler(adminHandler.HandlePrivacyErase))))
 	adminProtectedMux.Handle("POST /admin/websites/{id}/datenschutz/loeschen", requireFresh(http.HandlerFunc(adminHandler.ErrHandler(adminHandler.HandlePrivacyErase))))
 	adminProtectedMux.HandleFunc("GET /admin/websites/{id}/datenschutz/geloescht", adminHandler.ErrHandler(adminHandler.HandlePrivacyErased))
+	// Correcting one field of a person's record (Phase 33.2, DSR-02). The
+	// handler refuses it to somebody without the publishing right; no
+	// password is asked again, because a correction can itself be corrected.
+	adminProtectedMux.HandleFunc("POST /admin/websites/{id}/datenschutz/berichtigen", adminHandler.ErrHandler(adminHandler.HandlePrivacyCorrect))
 	// The retention periods. Reading them is open to the same people;
 	// changing one deletes data at the next run of the job, so the POST asks
 	// for the password again and the handler for the publishing right

@@ -78,6 +78,7 @@
 <section class="card" style="margin-bottom: var(--space-3);">
     <h2>{{t .Heading}} <span class="text-muted">({{len .Records}})</span></h2>
     {{range .Records}}
+    {{$rec := .}}
     <article style="margin-block-start: var(--space-3);">
         <h3>
             {{if .Link}}<a href="{{.Link}}">{{t .Label}} {{.Key}}</a>{{else}}{{t .Label}} {{.Key}}{{end}}
@@ -88,6 +89,30 @@
             <dt>{{t .Label}}</dt><dd style="white-space:pre-line">{{.Value}}</dd>
             {{end}}
         </dl>
+        {{if and $.MayCorrect .Correct}}
+        {{/* Berichtigen (DSR-02): ein kleines Formular je Feld, das sich
+             berichtigen lässt. Ohne Skript ein gewöhnlicher POST; die Seite
+             kommt danach mit der Adresse zurück, unter der der Datensatz
+             jetzt steht. */}}
+        <details class="privacy-correct">
+            <summary>{{t "Correct…"}}</summary>
+            {{range .Correct}}
+            <form method="post" action="{{$.CorrectURL}}" hx-post="{{$.CorrectURL}}" class="privacy-correct__form">
+                <input type="hidden" name="gorilla.csrf.Token" value="{{$.CSRFToken}}">
+                <input type="hidden" name="email" value="{{$.Email}}">
+                {{if $.RequestID}}<input type="hidden" name="anfrage" value="{{$.RequestID}}">{{end}}
+                <input type="hidden" name="source" value="{{$rec.Source}}">
+                <input type="hidden" name="key" value="{{$rec.Key}}">
+                <input type="hidden" name="field" value="{{.Name}}">
+                <label class="form-label" for="correct-{{$rec.Source}}-{{$rec.Key}}-{{.Name}}">{{t .Label}}</label>
+                <input type="{{if eq .Name "email"}}email{{else}}text{{end}}" class="form-input"
+                       id="correct-{{$rec.Source}}-{{$rec.Key}}-{{.Name}}" name="value" value="{{.Value}}"
+                       autocomplete="off" spellcheck="false">
+                <button type="submit" class="btn" hx-disabled-elt="this">{{t "Save"}}</button>
+            </form>
+            {{end}}
+        </details>
+        {{end}}
     </article>
     {{end}}
 </section>
