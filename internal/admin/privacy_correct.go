@@ -9,6 +9,7 @@ import (
 	"github.com/holzcloud/holzcloud-cms/internal/activity"
 	"github.com/holzcloud/holzcloud-cms/internal/dsr"
 	"github.com/holzcloud/holzcloud-cms/internal/i18n"
+	"github.com/holzcloud/holzcloud-cms/internal/plugin"
 	"github.com/holzcloud/holzcloud-cms/internal/web"
 )
 
@@ -30,7 +31,8 @@ import (
 // Every correction writes one privacy.correct entry naming the source, the
 // key and the field. A contact field's entry carries no value: the old
 // address is the very data the person asked to have replaced, and the log
-// outlives the correction.
+// outlives the correction. An invoice field's entry carries the old and the
+// new value, because the original of an invoice has to stay ascertainable.
 //
 // A refusal goes back to the screen with a sentence, as a refused erasure
 // does, so the answer is the same with and without JavaScript.
@@ -49,6 +51,8 @@ var correctRefusals = []struct {
 	{dsr.ErrErased, i18n.N("This order was erased and cannot be corrected.")},
 	{dsr.ErrNotCorrectable, i18n.N("This field cannot be corrected here.")},
 	{dsr.ErrNotFound, i18n.N("This record was not found under this address on this website.")},
+	{dsr.ErrBadValue, i18n.N("This value does not fit the field: a country is a two-letter code such as CH, and a Swiss postal code has four digits.")},
+	{plugin.ErrPrivacyFailed, i18n.N("The plugin did not accept this value.")},
 }
 
 // correctRefusal is the sentence of a refused correction, "" for an error
@@ -93,15 +97,29 @@ func (h *Handler) HandlePrivacyCorrect(w http.ResponseWriter, r *http.Request) e
 		return h.redirect(w, r, back)
 	}
 
+	meta := map[string]any{"source": ch.Source, "key": ch.Key, "field": ch.Field, "invoice": ch.Invoice}
+	if ch.Invoice {
+		// AO § 146(4) forbids changing a record in a way that leaves its
+		// original content no longer ascertainable. An order is the seller's
+		// copy of an invoice, so an invoice field keeps its old value here,
+		// in the activity log, beside the new one. The log's manual purge
+		// stays the operator's to use. The e-mail address is never an
+		// invoice field, so no address reaches the log this way.
+		meta["old"], meta["new"] = ch.Old, ch.New
+	}
 	websiteID := ws.ID
 	h.LogActivity(r, activity.Entry{
 		Action:     activity.ActionPrivacyCorrect,
 		EntityType: "website",
 		EntityID:   ws.ID,
 		WebsiteID:  &websiteID,
-		Metadata:   map[string]any{"source": ch.Source, "key": ch.Key, "field": ch.Field, "invoice": ch.Invoice},
+		Metadata:   meta,
 	})
-	web.SetFlashSuccess(h.sm, ctx, "Corrected.")
+	if ch.Invoice {
+		web.SetFlashSuccess(h.sm, ctx, "Corrected. An invoice already issued with the old details may need a corrected invoice.")
+	} else {
+		web.SetFlashSuccess(h.sm, ctx, "Corrected.")
+	}
 	// A corrected address finds the record only under the new one, so the
 	// screen comes back with that.
 	if ch.Field == "email" {

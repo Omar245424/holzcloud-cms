@@ -390,7 +390,7 @@ func (ordersSource) Name() string { return "orders" }
 // ordersQuery is the statement ordersSource runs. It never selects token.
 const ordersQuery = `SELECT id, number, currency, email, name, company, vat_number, phone,
 	street, postal_code, city, country, note, total_gross, status, payment_method,
-	payment_status, payment_reference, created_at
+	payment_status, payment_reference, created_at, erased_at IS NOT NULL
 	FROM orders WHERE website_id = $1 AND email = $2 COLLATE NOCASE`
 
 func (o ordersSource) Find(ctx context.Context, websiteID int64, email string) ([]Record, error) {
@@ -412,10 +412,11 @@ func (o ordersSource) Find(ctx context.Context, websiteID int64, email string) (
 			street, postal, city, country, note               string
 			total                                             int64
 			status, method, payStatus, payRef, createdAt      string
+			erased                                            bool
 		)
 		if err := rows.Scan(&id, &number, &currency, &addr, &name, &company, &vat, &phone,
 			&street, &postal, &city, &country, &note, &total, &status, &method,
-			&payStatus, &payRef, &createdAt); err != nil {
+			&payStatus, &payRef, &createdAt, &erased); err != nil {
 			return nil, err
 		}
 		cur := money.CurrencyFor(currency)
@@ -426,6 +427,9 @@ func (o ordersSource) Find(ctx context.Context, websiteID int64, email string) (
 			Label:  i18n.N("Order"),
 			Time:   parseTime(createdAt),
 			Link:   "/admin/websites/" + strconv.FormatInt(websiteID, 10) + "/bestellungen/" + number,
+			// An erased order has lost its address and is seldom found by
+			// one. When it is, it says so, and nothing corrects it.
+			Erased: erased,
 			Fields: []Field{
 				field("email", addr),
 				field("name", name),

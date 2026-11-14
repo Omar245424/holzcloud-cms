@@ -96,6 +96,7 @@
              jetzt steht. */}}
         <details class="privacy-correct">
             <summary>{{t "Correct…"}}</summary>
+            {{if .Invoice}}<p class="form-hint text-muted privacy-correct__hint">{{t "Invoice fields keep their old value in the activity log, and an invoice already issued may need a corrected invoice."}}</p>{{end}}
             {{range .Correct}}
             <form method="post" action="{{$.CorrectURL}}" hx-post="{{$.CorrectURL}}" class="privacy-correct__form">
                 <input type="hidden" name="gorilla.csrf.Token" value="{{$.CSRFToken}}">
@@ -113,6 +114,8 @@
             {{end}}
         </details>
         {{end}}
+        {{with .NotCorrected}}<p class="text-muted privacy-correct__note">{{t .}}</p>{{end}}
+        {{with .AccountEdit}}<p class="privacy-correct__note"><a href="{{.}}">{{t "Edit the account"}}</a></p>{{end}}
     </article>
     {{end}}
 </section>

@@ -103,6 +103,29 @@ type privacyRecordView struct {
 	Shown []dsr.Field
 	// Correct are the fields the operator may correct (dsr.Correctable).
 	Correct []dsr.CorrectableField
+	// Invoice is true when one of them is an invoice field: the screen says
+	// what correcting it keeps.
+	Invoice bool
+	// NotCorrected says why a record has no correction, a catalogue key, ""
+	// when it has one or when there is nothing to say.
+	NotCorrected string
+	// AccountEdit is the edit screen of a staff account, for an
+	// administrator; "" for everybody else and every other record.
+	AccountEdit string
+}
+
+// privacyNotCorrected says why a record is not corrected here, a catalogue
+// key, "" for a record that is.
+func privacyNotCorrected(rec dsr.Record) string {
+	switch {
+	case rec.Erased:
+		return i18n.N("This order was erased and cannot be corrected.")
+	case rec.Source == "requests":
+		return i18n.N("This is a record of a request and is not corrected.")
+	case rec.Source == "mail":
+		return i18n.N("This is a copy of a mail as it was queued and is not corrected.")
+	}
+	return ""
 }
 
 // privacyAddress is the screen of one website.
@@ -171,7 +194,10 @@ func privacyGroups(res *dsr.Result, loc *time.Location) []privacyGroup {
 			if !rec.Time.IsZero() {
 				rec.Time = rec.Time.In(loc)
 			}
-			view := privacyRecordView{Record: rec, Correct: dsr.Correctable(rec)}
+			view := privacyRecordView{Record: rec, Correct: dsr.Correctable(rec), NotCorrected: privacyNotCorrected(rec)}
+			for _, f := range view.Correct {
+				view.Invoice = view.Invoice || f.Invoice
+			}
 			for _, f := range rec.Fields {
 				if f.Value == "" {
 					continue
@@ -233,6 +259,17 @@ func (h *Handler) HandlePrivacyPerson(w http.ResponseWriter, r *http.Request) er
 		data.EraseURL = privacyEraseAddress(ws.ID) + "?" + eraseQuery(res.Email, data.RequestID)
 		data.MayCorrect = !h.readOnly(r)
 		data.CorrectURL = privacyCorrectAddress(ws.ID)
+		// A staff account is corrected on its own screen, which belongs to
+		// administrators.
+		if h.isAdmin(r) {
+			for gi := range data.Groups {
+				for ri, rec := range data.Groups[gi].Records {
+					if rec.Source == "accounts" {
+						data.Groups[gi].Records[ri].AccountEdit = rec.Link
+					}
+				}
+			}
+		}
 	}
 	return web.RenderAdmin(w, h.templates, r, "privacy_person", data)
 }
