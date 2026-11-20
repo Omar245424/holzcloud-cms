@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/holzcloud/holzcloud-cms/internal/activity"
 	"github.com/holzcloud/holzcloud-cms/internal/legal"
 	"github.com/holzcloud/holzcloud-cms/internal/media"
 	"github.com/holzcloud/holzcloud-cms/internal/plugin"
@@ -111,7 +112,8 @@ func (s *Service) expireKind(ctx context.Context, ws retentionWebsite, p Period,
 		before := legal.OrderCutoff(now, years)
 		n, err := s.expireOrders(ctx, ws.id, before, now)
 		m, perr := s.expirePlugins(ctx, ws.id, plugin.PrivacyKindOrder, before, covered, pluginsErr)
-		return n + m, errors.Join(err, perr)
+		serr := s.stripExpiredCorrections(ctx, ws.id, before)
+		return n + m, errors.Join(err, perr, serr)
 	}
 	return 0, &expireError{cause: causeDatabase, detail: "no expirer for the kind " + p.Kind}
 }
@@ -145,6 +147,28 @@ func (s *Service) expireOrders(ctx context.Context, websiteID int64, before, now
 		(SELECT id FROM orders WHERE website_id = $1 AND created_at < $2
 		   AND (retain_until IS NULL OR retain_until <= $3) LIMIT $4)`,
 		websiteID, before.UTC().Format(timeLayout), now.UTC().Format(timeLayout), expireBatch)
+}
+
+// stripExpiredCorrections removes the old and the new value from the
+// activity entries of invoice-field corrections made before the order
+// cut-off, the counterpart at the end of the period to what stripCorrections
+// does at an erasure. A correction is made after its order was placed, so an
+// entry older than the cut-off belongs to an order whose period has ended:
+// the order is gone, and the log, which no period reaches, must not keep the
+// person's former name and address beyond it. The entry stays, with the
+// field and the order, as the record that a correction was made. An entry
+// whose metadata is not JSON is left alone.
+func (s *Service) stripExpiredCorrections(ctx context.Context, websiteID int64, before time.Time) error {
+	if _, err := s.db.Write.ExecContext(ctx, `UPDATE activity_log SET metadata = json_remove(metadata, '$.old', '$.new')
+		WHERE action = $1 AND website_id = $2 AND created_at < $3
+		  AND CASE WHEN json_valid(metadata)
+		      THEN json_extract(metadata, '$.invoice') = 1
+		           AND (json_type(metadata, '$.old') IS NOT NULL OR json_type(metadata, '$.new') IS NOT NULL)
+		      ELSE 0 END`,
+		activity.ActionPrivacyCorrect, websiteID, before.UTC().Format(timeLayout)); err != nil {
+		return &expireError{cause: causeDatabase, detail: "the corrections of expired orders in the activity log: " + err.Error()}
+	}
+	return nil
 }
 
 // deleteBatched runs a delete whose last argument is the batch size until a

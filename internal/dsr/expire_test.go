@@ -2,6 +2,7 @@ package dsr
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -374,5 +375,76 @@ func TestAPluginThatAlwaysHasMoreFailsTheKind(t *testing.T) {
 	}
 	if retentionExists(t, database, "privacy_requests", request) {
 		t.Error("the requests of the same website were not deleted")
+	}
+}
+
+// WR-07, the owner's decision: a corrected invoice field keeps its old and
+// new value in the activity log while the order is kept. When the order's
+// period ends and the run deletes it, both values go from the log too; the
+// entry stays as the record that a field was corrected. A correction is
+// made after its order was placed, so an entry older than the order cut-off
+// belongs to an order whose period has ended.
+func TestExpiryStripsTheCorrectedValuesOfExpiredOrders(t *testing.T) {
+	s, database := retentionService(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 14, 2, 0, 0, 0, time.UTC)
+	de := website(t, database, "DE")
+	other := website(t, database, "OTHER")
+	expiretestCountry(t, database, de, "DE")
+	expiretestCountry(t, database, other, "CH")
+	expiretestOrder(t, database, de, "2016-0001", "2016-06-01T10:00:00Z", "")
+	expiretestOrder(t, database, de, "2018-0001", "2018-06-01T10:00:00Z", "")
+
+	logged := func(websiteID int64, source, key, created string, invoice bool) int64 {
+		m := map[string]any{"source": source, "key": key, "field": "street", "invoice": invoice}
+		if invoice {
+			m["old"], m["new"] = "Altweg 9", "Bahnhofstrasse 1"
+		}
+		meta, _ := json.Marshal(m)
+		res, err := database.Write.Exec(`INSERT INTO activity_log (actor_email, action, entity_type, entity_id, website_id, metadata, created_at)
+			VALUES ('chef@example.com', 'privacy.correct', 'website', $1, $1, $2, $3)`, websiteID, string(meta), created)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, _ := res.LastInsertId()
+		return id
+	}
+	expired := logged(de, "orders", "2016-0001", "2016-07-01T10:00:00Z", true)
+	farm := logged(de, "plugin:bestellung", "bestellung:20160701T090000-aaaaaaaa", "2016-07-02T10:00:00Z", true)
+	kept := logged(de, "orders", "2018-0001", "2018-07-01T10:00:00Z", true)
+	swiss := logged(other, "orders", "2016-0009", "2016-07-01T10:00:00Z", true)
+	findExec(t, database, `INSERT INTO activity_log (actor_email, action, entity_type, entity_id, website_id, metadata, created_at)
+		VALUES ('chef@example.com', 'privacy.correct', 'website', $1, $1, 'not json', '2016-07-01T10:00:00Z')`, de)
+
+	if _, err := s.RunRetention(ctx, now); err != nil {
+		t.Fatalf("RunRetention: %v", err)
+	}
+	meta := func(id int64) map[string]any {
+		var raw string
+		if err := database.Read.QueryRow(`SELECT metadata FROM activity_log WHERE id = $1`, id).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(raw), &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	for name, id := range map[string]int64{"the expired order": expired, "the expired farm-shop order": farm} {
+		m := meta(id)
+		if _, ok := m["old"]; ok {
+			t.Errorf("%s: the entry still carries the old value: %v", name, m)
+		}
+		if _, ok := m["new"]; ok {
+			t.Errorf("%s: the entry still carries the new value: %v", name, m)
+		}
+		if m["field"] != "street" || m["key"] == nil {
+			t.Errorf("%s: the entry lost what was corrected: %v", name, m)
+		}
+	}
+	for name, id := range map[string]int64{"an order still in its period": kept, "a website with ten years": swiss} {
+		if m := meta(id); m["old"] != "Altweg 9" || m["new"] != "Bahnhofstrasse 1" {
+			t.Errorf("%s: the entry was changed: %v", name, m)
+		}
 	}
 }
