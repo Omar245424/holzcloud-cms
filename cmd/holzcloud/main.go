@@ -1213,6 +1213,9 @@ func newRouter(d routerDeps) (http.Handler, error) {
 	// already and changes nothing (Phase 33.2, DSR-01).
 	adminProtectedMux.HandleFunc("GET /admin/websites/{id}/datenschutz", adminHandler.ErrHandler(adminHandler.HandlePrivacyPerson))
 	adminProtectedMux.HandleFunc("GET /admin/websites/{id}/datenschutz/export.json", adminHandler.ErrHandler(adminHandler.HandlePrivacyExport))
+	// The same answer as a sheet to print and hand to the person, in the
+	// website's language (D-02), open to the same people as the download.
+	adminProtectedMux.HandleFunc("GET /admin/websites/{id}/datenschutz/auskunft", adminHandler.ErrHandler(adminHandler.HandlePrivacyAnswerPrint))
 	// The requests people sent about their data, beside the search: open to
 	// the same people, because reading them publishes nothing (D-01).
 	adminProtectedMux.HandleFunc("GET /admin/websites/{id}/datenschutz/anfragen", adminHandler.ErrHandler(adminHandler.HandlePrivacyRequests))

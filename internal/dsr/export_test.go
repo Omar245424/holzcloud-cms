@@ -6,6 +6,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/holzcloud/holzcloud-cms/internal/i18n"
+	"github.com/holzcloud/holzcloud-cms/internal/legal"
+	"github.com/holzcloud/holzcloud-cms/internal/privacy"
 )
 
 func TestTheExportHoldsTheRecords(t *testing.T) {
@@ -122,5 +126,118 @@ func TestTheExportCarriesNoSecret(t *testing.T) {
 	}
 	if len(res.BySource()["accounts"]) != 1 || len(res.BySource()["orders"]) != 1 {
 		t.Errorf("the export should hold the account and the order: %s", text)
+	}
+}
+
+// Art. 15(1) GDPR and Art. 25(2) FADP: the answer carries, beside the data,
+// who holds it, why, on what basis, for whom, for how long, where it came
+// from and what the person can do. All of it comes from the record of
+// processing, so the export and the record cannot disagree.
+func TestTheExportDescribesWhatItHolds(t *testing.T) {
+	_, database := newTestStore(t)
+	a := website(t, database, "Holzwerk")
+	findOrder(t, database, a, "2026-0801", "ada@example.com")
+	findExec(t, database, `INSERT INTO form_messages (website_id, name, email, subject, body, created_at)
+		VALUES ($1, 'Ada', 'ada@example.com', 'Frage', 'Habt ihr Eichenbretter?', '2026-02-01T09:00:00Z')`, a)
+	res, err := NewService(database).Find(context.Background(), a, "ada@example.com")
+	if err != nil {
+		t.Fatalf("Find: %v", err)
+	}
+
+	in := recordInput()
+	in.Name = "Holzwerk"
+	in.Lang = "de"
+	in.Set = legal.ParseSet("eu,ch")
+	in.Features = privacy.Features{Shop: true, Forms: true}
+	rec := BuildRecord(in)
+
+	exp := BuildExport(res, a, "Holzwerk", time.Now())
+	exp.Describe(rec)
+	raw, err := json.Marshal(exp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Controller map[string]string `json:"controller"`
+		Frameworks []string          `json:"frameworks"`
+		Categories []struct {
+			Kind       string `json:"kind"`
+			Purpose    string `json:"purpose"`
+			LegalBasis string `json:"legal_basis"`
+			Recipients string `json:"recipients"`
+			Retention  string `json:"retention"`
+			Source     string `json:"source"`
+		} `json:"categories"`
+		Rights []struct {
+			Framework string `json:"framework"`
+			Text      string `json:"text"`
+		} `json:"rights"`
+		Lang string `json:"lang"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("%v\n%s", err, raw)
+	}
+	if got.Controller["name"] != "Holzwerk" || got.Controller["street"] != in.Street || got.Controller["city"] != in.City {
+		t.Errorf("controller %v", got.Controller)
+	}
+	if strings.Join(got.Frameworks, ",") != "eu,ch" {
+		t.Errorf("frameworks %v", got.Frameworks)
+	}
+	if got.Lang != "de" {
+		t.Errorf("lang %q", got.Lang)
+	}
+	kinds := map[string]int{}
+	for i, c := range got.Categories {
+		kinds[c.Kind] = i
+		for what, cell := range map[string]string{"purpose": c.Purpose, "legal basis": c.LegalBasis, "recipients": c.Recipients, "retention": c.Retention} {
+			if strings.TrimSpace(cell) == "" {
+				t.Errorf("category %s: the %s is empty", c.Kind, what)
+			}
+		}
+		if c.Source != i18n.T("de", sourceProvided) {
+			t.Errorf("category %s: source %q, want the German %q", c.Kind, c.Source, i18n.T("de", sourceProvided))
+		}
+	}
+	if len(got.Categories) != 2 {
+		t.Fatalf("categories %+v, want order and form_submission only", got.Categories)
+	}
+	order, okOrder := kinds["order"]
+	_, okForm := kinds["form_submission"]
+	if !okOrder || !okForm {
+		t.Fatalf("categories %+v, want order and form_submission", got.Categories)
+	}
+	if !strings.Contains(got.Categories[order].Retention, i18n.T("de", legal.OrderPeriodFor("CH").Basis())) {
+		t.Errorf("the order's retention %q does not name the seller's period", got.Categories[order].Retention)
+	}
+	if got.Categories[order].Purpose != i18n.T("de", purposeOrders) || got.Categories[order].Purpose == purposeOrders {
+		t.Errorf("the order's purpose %q is not the German record's", got.Categories[order].Purpose)
+	}
+	rights := map[string]string{}
+	for _, r := range got.Rights {
+		rights[r.Framework] += r.Text + " "
+	}
+	if !strings.Contains(rights["eu"], "Aufsichtsbehörde") || !strings.Contains(rights["eu"], "Art. 15") {
+		t.Errorf("EU rights %q do not name access and the supervisory authority in German", rights["eu"])
+	}
+	if !strings.Contains(rights["ch"], "EDÖB") || !strings.Contains(rights["ch"], "Art. 25") {
+		t.Errorf("CH rights %q do not name access and the FDPIC in German", rights["ch"])
+	}
+	if _, ok := rights["us"]; ok {
+		t.Error("rights of a framework the website does not follow")
+	}
+
+	// Nothing found: no categories, still the controller and the rights.
+	none, err := NewService(database).Find(context.Background(), a, "nobody@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty := BuildExport(none, a, "Holzwerk", time.Now())
+	empty.Describe(rec)
+	raw, _ = json.Marshal(empty)
+	if !strings.Contains(string(raw), `"categories":[]`) {
+		t.Errorf("an empty export: categories are not an empty list: %s", raw)
+	}
+	if empty.Controller["name"] != "Holzwerk" || len(empty.Rights) == 0 {
+		t.Errorf("an empty export lacks the controller or the rights: %+v %+v", empty.Controller, empty.Rights)
 	}
 }

@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 	"github.com/holzcloud/holzcloud-cms/internal/db"
 	"github.com/holzcloud/holzcloud-cms/internal/domain"
 	"github.com/holzcloud/holzcloud-cms/internal/dsr"
+	"github.com/holzcloud/holzcloud-cms/internal/i18n"
 	"github.com/holzcloud/holzcloud-cms/internal/user"
 )
 
@@ -319,6 +321,132 @@ func TestAnExportLeavesNoAddressInTheLog(t *testing.T) {
 	}
 	if total != 1 {
 		t.Errorf("%d entries after viewing the screen, want still 1", total)
+	}
+}
+
+// privacyLocale sets the website's main language and makes it a shop that
+// follows EU and CH law.
+func privacyLocale(t *testing.T, database *db.DB, websiteID int64, locale string) {
+	t.Helper()
+	if _, err := database.Write.Exec(`UPDATE websites SET locale = $1, shop_base = 'shop', legal_frameworks = 'eu,ch',
+		country = 'CH', street = 'Dorfstrasse 1', postal_code = '3000', city = 'Bern' WHERE id = $2`, locale, websiteID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The export answers the person, so it speaks the website's language, not
+// the operator's.
+func TestTheExportIsInTheWebsitesLanguage(t *testing.T) {
+	h, sm, database, ws := privacyAdmin(t)
+	privacyLocale(t, database, ws.ID, "fr")
+	privacyOrder(t, database, ws.ID, "2026-0901", "ada@example.com", "Ada Lovelace")
+
+	req := httptest.NewRequest(http.MethodGet, privacyScreen(ws.ID)+"/export.json?email=ada@example.com", nil)
+	req = req.WithContext(i18n.WithLang(req.Context(), "de"))
+	req.SetPathValue("id", strconv.FormatInt(ws.ID, 10))
+	rec := serve(t, h, sm, h.HandlePrivacyExport, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200", rec.Code)
+	}
+	var got dsr.Export
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Lang != "fr" {
+		t.Errorf("lang %q, want fr", got.Lang)
+	}
+	purpose := "Carrying out orders, and keeping the records the law requires."
+	if len(got.Categories) != 1 || got.Categories[0].Kind != "order" {
+		t.Fatalf("categories %+v, want the order's", got.Categories)
+	}
+	if fr := i18n.T("fr", purpose); fr == purpose || got.Categories[0].Purpose != fr {
+		t.Errorf("the order's purpose %q, want the French %q", got.Categories[0].Purpose, fr)
+	}
+	if got.Controller["street"] != "Dorfstrasse 1" {
+		t.Errorf("controller %v", got.Controller)
+	}
+	var rights string
+	for _, r := range got.Rights {
+		rights += r.Text
+	}
+	if !strings.Contains(rights, "PFPDT") || !strings.Contains(rights, "autorité de contrôle") {
+		t.Errorf("rights are not French: %q", rights)
+	}
+
+	// Spanish has no legal texts of its own; a language without a
+	// catalogue neither. Both answer in English.
+	for _, locale := range []string{"es", "rm"} {
+		privacyLocale(t, database, ws.ID, locale)
+		rec := privacyGet(t, h, sm, h.HandlePrivacyExport, privacyScreen(ws.ID)+"/export.json?email=ada@example.com", ws.ID)
+		var got dsr.Export
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Lang != "en" || len(got.Categories) != 1 || got.Categories[0].Purpose != purpose {
+			t.Errorf("%s: lang %q, categories %+v, want English", locale, got.Lang, got.Categories)
+		}
+	}
+}
+
+func TestThePrintableAnswer(t *testing.T) {
+	h, sm, database, ws := privacyAdmin(t)
+	privacyLocale(t, database, ws.ID, "fr")
+	privacyOrder(t, database, ws.ID, "2026-0902", "ada@example.com", "Ada Lovelace")
+	answer := privacyScreen(ws.ID) + "/auskunft"
+
+	req := httptest.NewRequest(http.MethodGet, answer+"?email=ada@example.com", nil)
+	req = req.WithContext(i18n.WithLang(req.Context(), "de"))
+	req.SetPathValue("id", strconv.FormatInt(ws.ID, 10))
+	rec := serve(t, h, sm, h.HandlePrivacyAnswerPrint, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200", rec.Code)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", cc)
+	}
+	body := rec.Body.String()
+	fr := func(s string) string { return template.HTMLEscapeString(i18n.T("fr", s)) }
+	for _, want := range []string{
+		`<html lang="fr">`, "Dorfstrasse 1", "2026-0902", "Ada Lovelace", "noindex",
+		fr("Information about your personal data"),
+		fr("Carrying out orders, and keeping the records the law requires."),
+		"PFPDT",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the answer lacks %q", want)
+		}
+	}
+	for _, nav := range []string{`class="sidebar`, "/admin/logout", `class="section-tabs"`} {
+		if strings.Contains(body, nav) {
+			t.Errorf("the answer carries the admin's navigation (%s)", nav)
+		}
+	}
+
+	for _, bad := range []string{"", "?email=", "?email=nobody"} {
+		rec := privacyGet(t, h, sm, h.HandlePrivacyAnswerPrint, answer+bad, ws.ID)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%q: status %d, want 400", bad, rec.Code)
+		}
+	}
+
+	// One activity entry for the printed answer, with no address in it.
+	var meta string
+	if err := database.Read.QueryRow(`SELECT metadata FROM activity_log WHERE action = $1`, activity.ActionPrivacyExport).Scan(&meta); err != nil {
+		t.Fatalf("no privacy.export entry: %v", err)
+	}
+	if !strings.Contains(meta, `"format":"print"`) || strings.Contains(strings.ToLower(meta), "ada") {
+		t.Errorf("metadata %s", meta)
+	}
+
+	// The Privacy screen links it beside the JSON download.
+	screen := privacyGet(t, h, sm, h.HandlePrivacyPerson, privacyScreen(ws.ID)+"?email=ada@example.com", ws.ID)
+	sb := screen.Body.String()
+	link := `href="` + answer + `?email=ada%40example.com"`
+	if !strings.Contains(sb, link) {
+		t.Fatalf("the Privacy screen has no link %s", link)
+	}
+	if strings.Index(sb, link) < strings.Index(sb, "export.json") {
+		t.Error("the printable answer is not beside the JSON download")
 	}
 }
 

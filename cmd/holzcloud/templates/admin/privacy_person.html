@@ -70,6 +70,7 @@
     {{end}}
     <p>
         <a href="{{.ExportURL}}" class="btn" download>{{t "Download as JSON"}}</a>
+        <a href="{{.AnswerURL}}" class="btn" style="margin-left:var(--space-1)">{{t "Printable answer"}}</a>
         {{if .Count}}<a href="{{.EraseURL}}" class="btn btn--danger" style="margin-left:var(--space-1)">{{t "Erase…"}}</a>{{end}}
     </p>
 </div>

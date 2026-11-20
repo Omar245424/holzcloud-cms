@@ -73,6 +73,8 @@ type privacyPersonData struct {
 	Failed []string
 	// ExportURL is the download of what was found.
 	ExportURL string
+	// AnswerURL is the printable answer of the same records.
+	AnswerURL string
 	// EraseURL is the erasure page of the address, with the request the
 	// search came from.
 	EraseURL string
@@ -254,6 +256,7 @@ func (h *Handler) HandlePrivacyPerson(w http.ResponseWriter, r *http.Request) er
 			data.Failed = append(data.Failed, privacyHeading(f.Source, res.Holders))
 		}
 		data.ExportURL = privacyAddress(ws.ID) + "/export.json?email=" + url.QueryEscape(res.Email)
+		data.AnswerURL = privacyAnswerAddress(ws.ID) + "?email=" + url.QueryEscape(res.Email)
 		requestID, _ := strconv.ParseInt(r.URL.Query().Get("anfrage"), 10, 64)
 		data.RequestID = max(requestID, 0)
 		data.EraseURL = privacyEraseAddress(ws.ID) + "?" + eraseQuery(res.Email, data.RequestID)
@@ -277,6 +280,11 @@ func (h *Handler) HandlePrivacyPerson(w http.ResponseWriter, r *http.Request) er
 // HandlePrivacyExport answers with the JSON file of what the website holds
 // under ?email=.
 //
+// Beside the records the file carries the controller, the frameworks, what
+// each kind of record is processed for and the person's rights, from the
+// website's record of processing and in the website's language
+// (privacyAnswer): the file goes to the person, not to the operator.
+//
 // A missing or invalid address is a 400 with no body: there is nothing to
 // show, and a page would only be a second place to say what the screen says.
 // The file name carries the website and the date, never the address — a
@@ -289,7 +297,7 @@ func (h *Handler) HandlePrivacyExport(w http.ResponseWriter, r *http.Request) er
 	if err != nil || !ok {
 		return err
 	}
-	res, err := h.dataRights.Find(r.Context(), ws.ID, r.URL.Query().Get("email"))
+	ans, err := h.privacyAnswer(r, ws)
 	if errors.Is(err, dsr.ErrBadEmail) {
 		w.WriteHeader(http.StatusBadRequest)
 		return nil
@@ -297,8 +305,8 @@ func (h *Handler) HandlePrivacyExport(w http.ResponseWriter, r *http.Request) er
 	if err != nil {
 		return err
 	}
-	now := time.Now()
-	body, err := json.MarshalIndent(dsr.BuildExport(res, ws.ID, ws.Name, now), "", "  ")
+	res, now := ans.Result, ans.Now
+	body, err := json.MarshalIndent(ans.Export, "", "  ")
 	if err != nil {
 		return err
 	}

@@ -3,13 +3,17 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
+	"github.com/holzcloud/holzcloud-cms/internal/activity"
 	"github.com/holzcloud/holzcloud-cms/internal/domain"
 	"github.com/holzcloud/holzcloud-cms/internal/dsr"
 	"github.com/holzcloud/holzcloud-cms/internal/i18n"
+	"github.com/holzcloud/holzcloud-cms/internal/legal"
 	tmpl "github.com/holzcloud/holzcloud-cms/internal/template"
 	"github.com/holzcloud/holzcloud-cms/internal/web"
 )
@@ -168,6 +172,159 @@ func (h *Handler) HandlePrivacyRecordPrint(w http.ResponseWriter, r *http.Reques
 	// A standalone page has no fragment to answer an htmx request with.
 	r.Header.Del("HX-Request")
 	return web.RenderAdmin(w, h.templates, r, "privacy_record_print", data)
+}
+
+// websiteLang is the language an answer to a person is written in: the
+// website's main language, as the person read the website. Spanish reads
+// English, because there are no Spanish legal texts (33.1 D-16) and the
+// rights in the answer must say what the published notice says; a language
+// this build has no catalogue for reads English too.
+func websiteLang(ws *domain.Website) string {
+	tag := i18n.Normalise(ws.Locale)
+	base := i18n.Base(tag)
+	if base == "" {
+		base = tag
+	}
+	switch {
+	case tag == "" || base == "es":
+		return i18n.Source
+	case i18n.Known(tag):
+		return tag
+	case i18n.Known(base):
+		return base
+	}
+	return i18n.Source
+}
+
+// privacyAnswerAddress is the printable answer of one website.
+func privacyAnswerAddress(websiteID int64) string {
+	return privacyAddress(websiteID) + "/auskunft"
+}
+
+// privacyAnswerResult is one answer to an access request: what was found
+// under the address, and the record of processing that describes it, both
+// in the website's language.
+type privacyAnswerResult struct {
+	Lang   string
+	Result *dsr.Result
+	Input  dsr.RecordInput
+	Record dsr.ProcessingRecord
+	Export dsr.Export
+	Now    time.Time
+}
+
+// privacyAnswer finds what the website holds under ?email= and describes it
+// with the website's record of processing. The search runs in the website's
+// language too, so a plugin labels its fields for the person and not for
+// the operator. An invalid address is dsr.ErrBadEmail.
+func (h *Handler) privacyAnswer(r *http.Request, ws *domain.Website) (*privacyAnswerResult, error) {
+	lang := websiteLang(ws)
+	ctx := i18n.WithLang(r.Context(), lang)
+	res, err := h.dataRights.Find(ctx, ws.ID, r.URL.Query().Get("email"))
+	if err != nil {
+		return nil, err
+	}
+	in, err := h.recordInput(ctx, ws, lang)
+	if err != nil {
+		return nil, err
+	}
+	rec := dsr.BuildRecord(in)
+	exp := dsr.BuildExport(res, ws.ID, ws.Name, in.Now)
+	exp.Describe(rec)
+	return &privacyAnswerResult{Lang: lang, Result: res, Input: in, Record: rec, Export: exp, Now: in.Now}, nil
+}
+
+// answerKept is a record that was reduced at an erasure and stays until its
+// period ends.
+type answerKept struct {
+	// Label is a catalogue key.
+	Label, Key string
+	// Until is the date the record may be deleted, "" when it is not an
+	// order.
+	Until string
+}
+
+// privacyAnswerData backs the printable answer.
+type privacyAnswerData struct {
+	web.LayoutData
+	WebsiteName string
+	Email       string
+	// AsOf is the date of the answer, on the website's clock.
+	AsOf       string
+	Controller []recordRow
+	Count      int
+	Groups     []privacyGroup
+	Categories []dsr.ExportCategory
+	Rights     []dsr.ExportRight
+	Kept       []answerKept
+	// NotCovered and Failed tell the operator, on the screen only, that the
+	// answer may be incomplete.
+	NotCovered []dsr.Holder
+	Failed     bool
+	BackURL    string
+}
+
+// HandlePrivacyAnswerPrint shows the answer to an access request for
+// ?email= as a sheet to print or save as a PDF and hand to the person
+// (D-02): the same records and the same description as the JSON file, in
+// the website's language. It is a person's data, so it is never cached,
+// and handing it out is logged like the JSON download, without the
+// address.
+func (h *Handler) HandlePrivacyAnswerPrint(w http.ResponseWriter, r *http.Request) error {
+	ws, ok, err := h.privacyWebsite(w, r)
+	if err != nil || !ok {
+		return err
+	}
+	ans, err := h.privacyAnswer(r, ws)
+	if errors.Is(err, dsr.ErrBadEmail) {
+		w.WriteHeader(http.StatusBadRequest)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	r = r.WithContext(i18n.WithLang(r.Context(), ans.Lang))
+	loc := tmpl.LoadLocation(ws.TimeZone)
+	data := &privacyAnswerData{
+		LayoutData:  web.NewLayoutData(r, h.sm, web.Titlef(r, "Information about your personal data – %s", ws.Name)),
+		WebsiteName: ws.Name,
+		Email:       ans.Result.Email,
+		AsOf:        ans.Now.In(loc).Format("02.01.2006"),
+		Count:       len(ans.Result.Records),
+		Groups:      privacyGroups(ans.Result, loc),
+		Categories:  ans.Export.Categories,
+		Rights:      ans.Export.Rights,
+		NotCovered:  ans.Result.NotCovered(),
+		Failed:      len(ans.Result.Failed) > 0,
+		BackURL:     privacyAddress(ws.ID) + "?email=" + url.QueryEscape(ans.Result.Email),
+	}
+	for _, row := range recordControllerRows {
+		data.Controller = append(data.Controller, recordRow{Label: row.Label, Value: ans.Record.Controller[row.Key]})
+	}
+	for _, rec := range ans.Result.Records {
+		if !rec.Erased {
+			continue
+		}
+		k := answerKept{Label: rec.Label, Key: rec.Key}
+		if rec.Kind == dsr.RetentionOrder && !rec.Time.IsZero() {
+			k.Until = legal.OrderDeletableFrom(rec.Time, ans.Input.OrderYears).In(loc).Format("02.01.2006")
+		}
+		data.Kept = append(data.Kept, k)
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	r.Header.Del("HX-Request")
+	if err := web.RenderAdmin(w, h.templates, r, "privacy_answer_print", data); err != nil {
+		return err
+	}
+	websiteID := ws.ID
+	h.LogActivity(r, activity.Entry{
+		Action:     activity.ActionPrivacyExport,
+		EntityType: "website",
+		EntityID:   ws.ID,
+		WebsiteID:  &websiteID,
+		Metadata:   map[string]any{"records": len(ans.Result.Records), "format": "print"},
+	})
+	return nil
 }
 
 // HandlePrivacyRecordJSON answers with the record as a JSON file.
