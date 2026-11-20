@@ -103,6 +103,38 @@ func TestTheRecordScreenAndItsExports(t *testing.T) {
 	}
 }
 
+// The assistant's tool reads the record through the handler: the website's
+// main language unless asked for another, and the same activities as the
+// screen.
+func TestTheRecordScreenAndTheAssistantsOpAgree(t *testing.T) {
+	h, _, database, ws := privacyAdmin(t)
+	if _, err := database.Write.Exec(`UPDATE websites SET locale = 'it', shop_base = 'shop' WHERE id = $1`, ws.ID); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	rec, err := h.OpProcessingRecord(ctx, ws.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Lang != "it" {
+		t.Errorf("lang %q, want the website's it", rec.Lang)
+	}
+	ids := map[string]bool{}
+	for _, a := range rec.Activities {
+		ids[a.ID] = true
+	}
+	if !ids["orders"] || !ids["server_log"] {
+		t.Errorf("activities %v", ids)
+	}
+	de, err := h.OpProcessingRecord(ctx, ws.ID, "de")
+	if err != nil || de.Lang != "de" {
+		t.Errorf("asked for de: %q, %v", de.Lang, err)
+	}
+	if _, err := h.OpProcessingRecord(ctx, ws.ID+99, ""); err == nil {
+		t.Error("an unknown website gave a record")
+	}
+}
+
 func TestTheRecordScreenRefusesAnotherWebsite(t *testing.T) {
 	h, sm, database, a := privacyAdmin(t)
 	ctx := context.Background()

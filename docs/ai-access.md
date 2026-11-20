@@ -138,6 +138,7 @@ top:
 | Media & albums | `list_media` `get_media_library` `list_media_collection` `get_media` `upload_media` `create_upload_link` `update_media` `set_media_focus` `crop_media` `restore_media_original` `delete_media` `list_albums` `get_album` `create_album` `rename_album` `delete_album` `add_album_images` `update_album_image` `remove_album_image` `move_album_image` |
 | Structure | `list_menus` `get_menu` `create_menu` `update_menu` `delete_menu` `list_terms` `rename_term` `delete_term` `list_snippets` `get_snippet` `create_snippet` `update_snippet` `delete_snippet` `list_values` `get_value` `set_value` `delete_value` `list_redirects` `create_redirect` `delete_redirect` `check_links` `list_fields` `create_field`\* `update_field`\* `delete_field`\* `move_field`\* `list_kinds`\* `create_kind`\* `update_kind`\* `delete_kind`\* `move_kind`\* `manage_block_kinds`\* `create_block_kind`\* `update_block_kind`\* `delete_block_kind`\* `move_block_kind`\* |
 | Shop | `shop_overview` `list_products` `get_product` `create_product` `update_product` `delete_product` `list_orders` `get_order` `set_order_status` `recheck_payment` `resend_order_mail` `get_shop_settings`\* `update_shop_settings`\* |
+| Privacy | `get_processing_record` |
 | Installation | `key_info` and, admin keys only: `list_users` `get_user` `invite_user` `update_user` `create_password_reset_link` `create_invitation_link` `end_user_sessions` `disable_user_two_factor` `delete_user` `list_ai_keys` `create_ai_key` `revoke_ai_key` `list_plugins` `install_plugin` `enable_plugin` `disable_plugin` `set_plugin_websites` `remove_plugin` `get_mail_status` `retry_mail` `send_test_mail` `list_languages` `install_language` `remove_language` `get_branding` `update_branding` `read_activity_log` |
 
 \* admin key only — the same split as the admin, where these screens are for
@@ -168,6 +169,21 @@ first chosen framework ([security](security.md#legal-frameworks-the-privacy-page
 Opt-out requests are personal data a visitor gave to the website, and no tool
 reads, lists or describes them; they are on the admin's Opt-outs screen only
 (`TestOptOutsAreNotOnMCP`).
+
+`get_processing_record` reads a website's record of processing activities
+(GDPR Art. 30, FADP Art. 12) exactly as the admin's Settings → Privacy →
+Record of processing screen generates it: the controller, one activity per
+processing with purpose, data subjects, categories of data, legal basis,
+recipients, transfers and retention, the security measures and each
+framework's exemption. It takes the website and, optionally, `lang`; left out,
+the texts are in the website's main language. What the program cannot know —
+hosting and mail provider, the server's country, a data protection officer, TLS
+at the proxy — comes back marked as to be filled in. The record describes the
+website and holds nobody's data, so every key with access to the website may
+read it. A person's data is not reachable over MCP at all: searching by
+address, the access export and the printable answer, correction, erasure and
+the privacy requests stay in the admin, where somebody has checked who is
+asking (`TestNoToolReturnsAPersonsData`).
 
 `create_ai_key` issues `read` and `content` keys only; `revoke_ai_key` refuses
 the key that calls it, so an assistant cannot cut its own connection halfway
