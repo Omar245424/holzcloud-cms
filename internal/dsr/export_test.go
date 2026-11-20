@@ -102,6 +102,15 @@ func TestTheExportCarriesNoSecret(t *testing.T) {
 	secrets["token hash"] = "TOKEN-HASH-RESET"
 	secrets["order token"] = token
 
+	// The customer's confirmation mail ends with the order's link, and the
+	// link is the token. The mail is part of the export; the link is not.
+	confirmation := "Danke für Ihre Bestellung.\n\nIhre Bestellung online:\nhttps://a.example/bestellung/" + token + "\n"
+	findExec(t, database, `INSERT INTO outbox (website_id, kind, order_id, recipient, subject, body, next_attempt_at, created_at)
+		VALUES ($1, 'order_customer', (SELECT id FROM orders WHERE number = $2), 'ADA@example.com', 'Ihre Bestellung', $3,
+		'2026-03-01T10:00:00Z', '2026-03-01T10:00:00Z')`, a, number, confirmation)
+	findExec(t, database, `INSERT INTO mail_outbox (website_id, recipient, subject, body, created_at)
+		VALUES ($1, 'ada@example.com', 'Ihre Bestellung', $2, '2026-03-01T10:00:00Z')`, a, confirmation)
+
 	res, err := NewService(database).Find(context.Background(), a, "ada@example.com")
 	if err != nil {
 		t.Fatalf("Find: %v", err)

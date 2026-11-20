@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -292,6 +293,18 @@ const mailQueueQuery = `SELECT id, recipient, reply_to, subject, body, attempts,
 	FROM mail_outbox WHERE website_id = $1
 		AND (recipient = $2 COLLATE NOCASE OR reply_to = $2 COLLATE NOCASE)`
 
+// orderLink matches the confirmation link a customer's order mail ends
+// with. The path segment after /bestellung/ is the order's token, and the
+// token opens the order for whoever holds it: it is a credential, not data
+// about the person, so a body leaves this source with the token cut out and
+// the rest of the text as it was sent.
+var orderLink = regexp.MustCompile(`/bestellung/[^\s"'<>]+`)
+
+// withoutOrderLinks returns body with every order token replaced by "…".
+func withoutOrderLinks(body string) string {
+	return orderLink.ReplaceAllLiteralString(body, "/bestellung/…")
+}
+
 func (m mailSource) Find(ctx context.Context, websiteID int64, email string) ([]Record, error) {
 	out, err := m.outbox(ctx, websiteID, email)
 	if err != nil {
@@ -332,7 +345,7 @@ func (m mailSource) outbox(ctx context.Context, websiteID int64, email string) (
 				field("status", status),
 				field("created_at", createdAt),
 				field("sent_at", nullString(sentAt)),
-				field("body", body),
+				field("body", withoutOrderLinks(body)),
 			},
 		})
 	}
@@ -375,7 +388,7 @@ func (m mailSource) queue(ctx context.Context, websiteID int64, email string) ([
 				field("status", status),
 				field("created_at", createdAt),
 				field("sent_at", nullString(sentAt)),
-				field("body", body),
+				field("body", withoutOrderLinks(body)),
 			},
 		})
 	}
