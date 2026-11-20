@@ -351,6 +351,7 @@ func TestARequestByMailIsEnteredByHand(t *testing.T) {
 		{"no address", func(f url.Values) { f.Set("email", "") }, "Please give the e-mail address the request is about."},
 		{"no date", func(f url.Values) { f.Set("received", "") }, "Please give the day the request arrived."},
 		{"a date ahead", func(f url.Values) { f.Set("received", time.Now().AddDate(0, 0, 2).Format("2006-01-02")) }, "Please give the day the request arrived."},
+		{"a year typed wrong", func(f url.Values) { f.Set("received", time.Now().AddDate(-20, 0, 0).Format("2006-01-02")) }, "This day lies more than two years back. Please check the year."},
 		{"the form as manner", func(f url.Values) { f.Set("manner", dsr.MannerForm) }, "Please choose how the request arrived."},
 		{"an opt-out", func(f url.Values) { f.Set("kind", dsr.KindOptOut) }, "Please choose what the person asks for."},
 	} {

@@ -575,6 +575,10 @@ func TestARequestByPostIsEntered(t *testing.T) {
 		{"by fax", Request{Kind: KindAccess, Manner: "fax", Email: "ada@example.com", CreatedAt: arrived}, ErrBadManner},
 		{"tomorrow", Request{Kind: KindAccess, Manner: MannerPhone, Email: "ada@example.com", CreatedAt: time.Now().Add(24 * time.Hour)}, ErrFutureTime},
 		{"no date", Request{Kind: KindAccess, Manner: MannerPhone, Email: "ada@example.com"}, ErrNoTime},
+		// A year typed wrong — 2004 for 2024 — is refused, not stored as a
+		// request already older than its record's period.
+		{"twenty years ago", Request{Kind: KindAccess, Manner: MannerPost, Email: "ada@example.com", CreatedAt: time.Now().AddDate(-20, 0, 0)}, ErrPastTime},
+		{"beyond the period", Request{Kind: KindAccess, Manner: MannerPost, Email: "ada@example.com", CreatedAt: time.Now().AddDate(0, -requestFloor, -1)}, ErrPastTime},
 		{"an opt-out", Request{Kind: KindOptOut, Manner: MannerEmail, Name: "Ada", CreatedAt: arrived}, ErrBadKind},
 		{"no address", Request{Kind: KindAccess, Manner: MannerEmail, Name: "Ada", CreatedAt: arrived}, ErrNeedsEmail},
 		{"not an address", Request{Kind: KindAccess, Manner: MannerEmail, Email: "ada@example.com?bcc=x", CreatedAt: arrived}, ErrBadEmail},

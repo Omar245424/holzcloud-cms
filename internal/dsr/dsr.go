@@ -217,6 +217,10 @@ var (
 	// ErrFutureTime means a restored request arrived in the future
 	// (Restore).
 	ErrFutureTime = errors.New("dsr: the request arrives in the future")
+	// ErrPastTime is a request entered as having arrived longer ago than
+	// the shortest period its record is kept: almost always a year typed
+	// wrong.
+	ErrPastTime = errors.New("dsr: the request arrived longer ago than its record is kept")
 	// ErrAnswerTime means a restored request was answered in the future, or
 	// before it arrived (Restore).
 	ErrAnswerTime = errors.New("dsr: the request is answered in the future or before it arrived")

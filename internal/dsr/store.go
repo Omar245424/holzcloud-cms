@@ -480,7 +480,8 @@ func (s *Store) Answer(ctx context.Context, websiteID, id int64, outcome, basis 
 // time is ErrNoTime, a time ahead of now by more than restoreSkew
 // ErrFutureTime — a request dated in the future would hold the website's
 // deletion lock of migration 00065 until then, and this package deletes
-// nothing that could undo it.
+// nothing that could undo it. A time further back than the shortest period
+// of a request's record (24 months) is ErrPastTime.
 //
 // Only a data kind (ErrBadKind otherwise), only a manner other than the form
 // (ErrBadManner otherwise: the form writes its own requests), and the values
@@ -498,6 +499,12 @@ func (s *Store) AddReceived(ctx context.Context, r Request) (int64, error) {
 	}
 	if r.CreatedAt.After(time.Now().Add(restoreSkew)) {
 		return 0, ErrFutureTime
+	}
+	// A request older than the shortest period its record is kept is a year
+	// typed wrong far more often than a letter found in a drawer, and stored
+	// it would start a deadline long past.
+	if r.CreatedAt.Before(time.Now().AddDate(0, -requestFloor, 0)) {
+		return 0, ErrPastTime
 	}
 	r, err := clean(r)
 	if err != nil {

@@ -634,6 +634,16 @@ func TestRequestsAreKeptAndSaySo(t *testing.T) {
 			t.Errorf("request %d kept until %v, want %s", id, it.Until, until)
 		}
 	}
+	// A data request nobody has answered is kept until it is answered: it
+	// has no date yet.
+	openData := expiretestRequest(t, database, a, KindAccess, time.Date(2024, 1, 1, 9, 0, 0, 0, time.UTC), time.Time{})
+	prev, err = s.Preview(ctx, a, "CH", "ada@example.com", erasetestNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if it, ok := erasetestItem(prev.Items, "requests", strconv.FormatInt(openData, 10)); !ok || it.Until != nil {
+		t.Errorf("an open data request: %+v, want kept without a date", it)
+	}
 	if !strings.Contains(requestsKept, "§ 7101") || !strings.Contains(requestsKept, "§ 7022(e)") {
 		t.Errorf("the request sentence does not name its law: %q", requestsKept)
 	}
@@ -644,8 +654,8 @@ func TestRequestsAreKeptAndSaySo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := erasetestCount(t, database, `SELECT COUNT(*) FROM privacy_requests WHERE website_id = $1`, a); n != 2 {
-		t.Errorf("%d requests left, want both: the record of a request is never erased", n)
+	if n := erasetestCount(t, database, `SELECT COUNT(*) FROM privacy_requests WHERE website_id = $1`, a); n != 3 {
+		t.Errorf("%d requests left, want all three: the record of a request is never erased", n)
 	}
 	if _, ok := erasetestItem(rep.Kept, "requests", strconv.FormatInt(answered, 10)); !ok {
 		t.Errorf("the report does not say the request was kept: %+v", rep.Kept)

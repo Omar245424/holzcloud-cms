@@ -8,7 +8,8 @@ package dsr
 //     form_submission, with the files of its records.
 //   - Privacy requests: every kind, opt-outs included, counted from the later
 //     of arrival and answer — the record of a request is kept for the request
-//     period after it was answered, as migration 00065 keeps the website.
+//     period after it was answered, as migration 00065 keeps the website. A
+//     data request nobody has answered is never deleted.
 //   - Orders: the shop's orders and every plugin's records of kind order,
 //     after the period of the seller's country from the end of the calendar
 //     year of the order (D-06), and never before a date an erasure stored.
@@ -124,11 +125,15 @@ func (s *Service) expireFormMessages(ctx context.Context, websiteID int64, befor
 }
 
 // expireRequests deletes the privacy requests whose arrival and answer both
-// lie before the cut-off. An unanswered request counts from its arrival.
+// lie before the cut-off. An opt-out that was never marked handled counts
+// from its arrival. A data request nobody has answered is never deleted: it
+// is the evidence that an answer is owed, and overdue, and its period starts
+// with the answer.
 func (s *Service) expireRequests(ctx context.Context, websiteID int64, before time.Time) (int, error) {
 	return s.deleteBatched(ctx, "privacy requests", `DELETE FROM privacy_requests WHERE website_id = $1 AND id IN
 		(SELECT id FROM privacy_requests WHERE website_id = $1 AND created_at < $2
-		   AND (handled_at IS NULL OR handled_at < $2) LIMIT $3)`,
+		   AND (handled_at IS NULL OR handled_at < $2)
+		   AND (kind = 'optout' OR outcome <> '') LIMIT $3)`,
 		websiteID, before.UTC().Format(timeLayout), expireBatch)
 }
 

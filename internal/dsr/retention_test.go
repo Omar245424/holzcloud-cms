@@ -279,11 +279,11 @@ func TestAFailedKindDoesNotStopTheOthers(t *testing.T) {
 	a := website(t, database, "A")
 	b := website(t, database, "B")
 	msgA := retentionFormMessage(t, database, a, now.AddDate(-2, 0, 0))
-	reqA := expiretestRequest(t, database, a, KindAccess, now.AddDate(-3, 0, 0), time.Time{})
+	reqA := expiretestRequest(t, database, a, KindAccess, now.AddDate(-3, 0, 0), now.AddDate(-3, 0, 1))
 	// Orders run after requests: the kind behind the broken one.
 	orderA := expiretestOrder(t, database, a, "2010-0001", "2010-03-01T10:00:00Z", "")
 	msgB := retentionFormMessage(t, database, b, now.AddDate(-2, 0, 0))
-	reqB := expiretestRequest(t, database, b, KindAccess, now.AddDate(-3, 0, 0), time.Time{})
+	reqB := expiretestRequest(t, database, b, KindAccess, now.AddDate(-3, 0, 0), now.AddDate(-3, 0, 1))
 	retentionBreak(s, a, RetentionRequest)
 
 	rep, err := s.RunRetention(ctx, now)

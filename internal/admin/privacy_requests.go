@@ -309,7 +309,8 @@ func (h *Handler) HandlePrivacyRequestAnswer(w http.ResponseWriter, r *http.Requ
 // HandlePrivacyRequestNew enters a data request that came by e-mail, letter
 // or telephone, with the day it arrived in the website's zone. The day starts
 // the deadline, so it is the day the request arrived and not the day it is
-// typed in, and it cannot lie ahead (dsr.Store.AddReceived).
+// typed in, and it cannot lie ahead, nor further back than a request's
+// record is kept (dsr.Store.AddReceived).
 func (h *Handler) HandlePrivacyRequestNew(w http.ResponseWriter, r *http.Request) error {
 	ws, ok, err := h.optoutWebsite(w, r)
 	if err != nil || !ok {
@@ -345,6 +346,8 @@ func (h *Handler) HandlePrivacyRequestNew(w http.ResponseWriter, r *http.Request
 			errs.Add("manner", "Please choose how the request arrived.")
 		case errors.Is(err, dsr.ErrFutureTime), errors.Is(err, dsr.ErrNoTime):
 			errs.Add("received", "Please give the day the request arrived.")
+		case errors.Is(err, dsr.ErrPastTime):
+			errs.Add("received", "This day lies more than two years back. Please check the year.")
 		case errors.Is(err, dsr.ErrNeedsEmail), errors.Is(err, dsr.ErrBadEmail):
 			errs.Add("email", "Please give the e-mail address the request is about.")
 		case errors.Is(err, dsr.ErrTooLong):

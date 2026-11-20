@@ -249,16 +249,25 @@ func (p *erasePlan) orderUntil(created time.Time) *time.Time {
 }
 
 // requestUntil is the date the retention job deletes a request: its period
-// after the later of arrival and answer, as expireRequests counts.
+// after the later of arrival and answer, as expireRequests counts. A data
+// request nobody has answered has no such date yet — it stays until it is
+// answered — and is nil.
 func (p *erasePlan) requestUntil(rec Record) *time.Time {
 	from := rec.Time
+	optOut, handled := false, false
 	for _, f := range rec.Fields {
-		if f.Name != "handled_at" || f.Value == "" {
-			continue
+		switch {
+		case f.Name == "kind":
+			optOut = f.Value == KindOptOut
+		case f.Name == "handled_at" && f.Value != "":
+			handled = true
+			if at := parseTime(f.Value); at.After(from) {
+				from = at
+			}
 		}
-		if handled := parseTime(f.Value); handled.After(from) {
-			from = handled
-		}
+	}
+	if !optOut && !handled {
+		return nil
 	}
 	until := from.UTC().AddDate(0, p.requestMonths, 0)
 	return &until

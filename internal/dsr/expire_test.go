@@ -118,8 +118,8 @@ func TestRequestsAreKeptAtLeast24Months(t *testing.T) {
 	if retentionExists(t, database, "privacy_requests", answeredLongAgo) {
 		t.Error("a request answered 25 months ago is still there")
 	}
-	if retentionExists(t, database, "privacy_requests", neverAnswered) {
-		t.Error("a request of 26 months that was never answered is still there")
+	if !retentionExists(t, database, "privacy_requests", neverAnswered) {
+		t.Error("a data request of 26 months that was never answered was deleted; it is kept until it is answered")
 	}
 
 	// The trigger of 00065 refuses the website for the kept row, and for
@@ -349,7 +349,7 @@ func TestAPluginThatAlwaysHasMoreFailsTheKind(t *testing.T) {
 		plugintestSeed(t, store, id, a, key, msg)
 	}
 	legacy := retentionFormMessage(t, database, a, now.AddDate(-2, 0, 0))
-	request := expiretestRequest(t, database, a, KindAccess, now.AddDate(-3, 0, 0), time.Time{})
+	request := expiretestRequest(t, database, a, KindAccess, now.AddDate(-3, 0, 0), now.AddDate(-3, 0, 1))
 
 	rep, err := s.RunRetention(ctx, now)
 	if err == nil {

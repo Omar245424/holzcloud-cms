@@ -1981,6 +1981,7 @@
 "This column has no heading and was therefore not mapped by itself.": "Cette colonne n'a pas d'intitulé et n'a donc pas été affectée d'elle-même.",
 "This connection request cannot be answered": "Cette demande de connexion ne peut pas aboutir",
 "This content kind already exists": "Ce type de contenu existe déjà",
+"This day lies more than two years back. Please check the year.": "Ce jour remonte à plus de deux ans. Merci de vérifier l'année.",
 "This field cannot be corrected here.": "Ce champ ne peut pas être rectifié ici.",
 "This field cannot be empty.": "Ce champ ne peut pas rester vide.",
 "This file already exists as “%s” – nothing was uploaded.": "Ce fichier existe déjà sous « %s » – rien n'a été téléversé.",

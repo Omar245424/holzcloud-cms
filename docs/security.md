@@ -363,7 +363,11 @@ opt-out goes once the website's period for privacy requests has passed,
 counted from the later of its arrival and the day it was marked handled, and
 that period is never shorter than the 24 months CCPA regulations § 7101 ask
 a request's record to be kept (`expireRequests`,
-`TestRequestsAreKeptAtLeast24Months`). The job and the deletion lock below
+`TestRequestsAreKeptAtLeast24Months`). A data request nobody has answered is
+never deleted: it is the evidence that an answer is owed. A request entered by
+hand cannot be dated further back than those 24 months, so a year typed wrong
+is refused at the field instead of being expired at the next run
+(`TestARequestByPostIsEntered`, `TestARequestByMailIsEnteredByHand`). The job and the deletion lock below
 count the same way, so neither lets go of a request the other still holds.
 
 Deleting the website does not get round that. A website that received or
@@ -664,7 +668,7 @@ Retention** (`dsr.Service.Periods`, `HandlePrivacyRetention`):
 | Kind | Default | Shortest | Set |
 |---|---|---|---|
 | Form submissions: the contact messages from before the plugin, and the contact form's messages with their attachment files | 12 months | 1 month | per website |
-| Privacy requests and opt-outs, from the later of arrival and answer | 24 months | 24 months (CCPA regulations § 7101) | per website |
+| Privacy requests and opt-outs, from the later of arrival and answer; a data request nobody has answered stays until it is | 24 months | 24 months (CCPA regulations § 7101) | per website |
 | Orders, the shop's and the farm shop's | the period of the seller's country | the same | per website, in whole years |
 | Staff accounts without a sign-in | 24 months | 1 month | for the whole installation, by an administrator |
 | Failed mail, in both queues | 90 days after it was queued | — | fixed |
