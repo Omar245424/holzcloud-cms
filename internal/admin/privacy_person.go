@@ -33,8 +33,11 @@ import (
 //
 // The rights are the order book's and the opt-out list's: anybody with access
 // to the website may search and download, and RequireWebsiteAccess guards the
-// path. Nothing here changes anything, so the search is a GET form and needs
-// no confirmation. It is not offered over MCP: personal data stays in the
+// path. The staff accounts are the exception: the list of accounts is an
+// administrator's screen, so the search, the export and the printable answer
+// include an account only for an administrator (dsr.Service.FindFor).
+// Nothing here changes anything, so the search is a GET form and needs no
+// confirmation. It is not offered over MCP: personal data stays in the
 // admin, as 33.1 D-16 decided for opt-outs.
 //
 // The address travels in the query string. The request log writes the path
@@ -240,7 +243,7 @@ func (h *Handler) HandlePrivacyPerson(w http.ResponseWriter, r *http.Request) er
 	email := strings.TrimSpace(r.URL.Query().Get("email"))
 	data.Email = email
 	if asked {
-		res, err := h.dataRights.Find(r.Context(), ws.ID, email)
+		res, err := h.dataRights.FindFor(r.Context(), ws.ID, email, h.isAdmin(r))
 		switch {
 		case errors.Is(err, dsr.ErrBadEmail):
 			data.Errors.Add("email", "This is not one e-mail address.")

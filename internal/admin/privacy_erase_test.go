@@ -318,6 +318,11 @@ func TestOnlyAnAdministratorMayEraseAnAccount(t *testing.T) {
 	if !exists() || !strings.Contains(result, retentionSays("Only an administrator can erase a staff account.")) {
 		t.Error("without the box, the result does not say the account stayed")
 	}
+	// Which account it is stays an administrator's to see.
+	staffKey := retentionSays("Staff account") + " " + strconv.FormatInt(staff, 10)
+	if strings.Contains(result, staffKey) || strings.Contains(body, staffKey) {
+		t.Error("an editor is shown the staff account's id")
+	}
 
 	// An administrator: offered, unticked, and erased when ticked.
 	admin := &eraseClient{t: t, h: h, sm: sm, user: chef, role: user.RoleAdmin, fresh: true}

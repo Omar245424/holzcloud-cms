@@ -450,6 +450,50 @@ func TestThePrintableAnswer(t *testing.T) {
 	}
 }
 
+// A staff account is the installation's, and the list of accounts is an
+// administrator's screen: the Privacy search, the export and the printable
+// answer show the account to an administrator and to nobody else.
+func TestOnlyAnAdministratorSeesAStaffAccount(t *testing.T) {
+	h, sm, database, ws := privacyAdmin(t)
+	ctx := context.Background()
+	users := user.NewStore(database, cheapHashing)
+	staff, err := users.Create(ctx, "Ada Admin", "ada@example.com", "passwort123", user.RoleAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privacyOrder(t, database, ws.ID, "2026-0911", "ada@example.com", "Ada Lovelace")
+	targets := map[string]func(http.ResponseWriter, *http.Request) error{
+		privacyScreen(ws.ID) + "?email=ada@example.com":             h.HandlePrivacyPerson,
+		privacyScreen(ws.ID) + "/export.json?email=ada@example.com": h.HandlePrivacyExport,
+		privacyScreen(ws.ID) + "/auskunft?email=ada@example.com":    h.HandlePrivacyAnswerPrint,
+	}
+	edit := "/admin/users/" + strconv.FormatInt(staff, 10) + "/edit"
+	shows := func(body string) bool {
+		return strings.Contains(body, edit) || strings.Contains(body, `"accounts"`) ||
+			strings.Contains(body, "Ada Admin")
+	}
+	for _, role := range []string{user.RoleEditor, user.RoleAdmin} {
+		for target, fn := range targets {
+			req := httptest.NewRequest(http.MethodGet, target, nil)
+			req.SetPathValue("id", strconv.FormatInt(ws.ID, 10))
+			rec := httptest.NewRecorder()
+			sm.LoadAndSave(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				sm.Put(r.Context(), auth.SessionKeyUserRole, role)
+				if err := fn(w, r); err != nil {
+					t.Fatalf("%s: %v", target, err)
+				}
+			})).ServeHTTP(rec, req)
+			body := rec.Body.String()
+			if rec.Code != http.StatusOK || !strings.Contains(body, "2026-0911") {
+				t.Fatalf("%s as %s: status %d, or the order is missing", target, role, rec.Code)
+			}
+			if got := shows(body); got != (role == user.RoleAdmin) {
+				t.Errorf("%s as %s: shows the staff account %v", target, role, got)
+			}
+		}
+	}
+}
+
 // 33.1 D-16 carried over: a person's data stays in the admin. No assistant
 // tool searches by address or reads a privacy request.
 func TestThePrivacyScreenIsNotOverMCP(t *testing.T) {

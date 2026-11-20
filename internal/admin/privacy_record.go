@@ -220,7 +220,7 @@ type privacyAnswerResult struct {
 func (h *Handler) privacyAnswer(r *http.Request, ws *domain.Website) (*privacyAnswerResult, error) {
 	lang := websiteLang(ws)
 	ctx := i18n.WithLang(r.Context(), lang)
-	res, err := h.dataRights.Find(ctx, ws.ID, r.URL.Query().Get("email"))
+	res, err := h.dataRights.FindFor(ctx, ws.ID, r.URL.Query().Get("email"), h.isAdmin(r))
 	if err != nil {
 		return nil, err
 	}

@@ -318,6 +318,11 @@ func (h *Handler) HandlePrivacyErase(w http.ResponseWriter, r *http.Request) err
 		group := dsr.EraseGroup(it.Source)
 		switch {
 		case group == dsr.EraseAccounts:
+			// An editor learns that an account stays and why, not which
+			// one: the accounts are an administrator's screen.
+			if !data.IsAdmin {
+				v.Key = ""
+			}
 			data.Accounts = append(data.Accounts, v)
 		case it.Action == dsr.ActionReduce:
 			data.Reduce = append(data.Reduce, v)
@@ -383,7 +388,7 @@ func (h *Handler) erasePrivacy(w http.ResponseWriter, r *http.Request, ws *domai
 	if err != nil {
 		return err
 	}
-	body, err := json.Marshal(erasedReportOf(ws.ID, rep))
+	body, err := json.Marshal(erasedReportOf(ws.ID, rep, h.isAdmin(r)))
 	if err != nil {
 		return err
 	}
@@ -391,8 +396,10 @@ func (h *Handler) erasePrivacy(w http.ResponseWriter, r *http.Request, ws *domai
 	return h.redirect(w, r, privacyErasedAddress(ws.ID))
 }
 
-// erasedReportOf is the result as the result page shows it.
-func erasedReportOf(websiteID int64, rep *dsr.ErasureReport) erasedReport {
+// erasedReportOf is the result as the result page shows it. For somebody
+// who is not an administrator a staff account it kept is named without its
+// id, as on the erasure page.
+func erasedReportOf(websiteID int64, rep *dsr.ErasureReport, admin bool) erasedReport {
 	out := erasedReport{WebsiteID: websiteID}
 	for _, g := range eraseGroups {
 		if n := rep.Deleted[g]; n > 0 {
@@ -406,7 +413,11 @@ func erasedReportOf(websiteID int64, rep *dsr.ErasureReport) erasedReport {
 		out.Reduced = append(out.Reduced, erasureViewOf(it, rep.Holders))
 	}
 	for _, it := range rep.Kept {
-		out.Kept = append(out.Kept, erasureViewOf(it, rep.Holders))
+		v := erasureViewOf(it, rep.Holders)
+		if it.Source == dsr.EraseAccounts && !admin {
+			v.Key = ""
+		}
+		out.Kept = append(out.Kept, v)
 	}
 	for _, f := range rep.Failed {
 		out.Failed = append(out.Failed, erasedFailure{

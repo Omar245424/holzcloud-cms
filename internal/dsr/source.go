@@ -192,7 +192,24 @@ func (s *Service) SetActivity(a *activity.Store) { s.activity = a }
 // The address is trimmed and must be one bare address (ValidEmail); anything
 // else is ErrBadEmail before any store is asked. A source that fails is
 // recorded in Result.Failed and the walk goes on.
+//
+// Find searches the staff accounts too. It is the search the service works
+// from — an erasure has to know of an account it may not erase — and never
+// what a screen shows: a screen asks FindFor.
 func (s *Service) Find(ctx context.Context, websiteID int64, email string) (*Result, error) {
+	return s.find(ctx, websiteID, email, true)
+}
+
+// FindFor is the search an operator sees, on the Privacy screen, in the
+// export and in the printable answer. The staff accounts are searched only
+// for an administrator: the list of accounts is an administrator's screen,
+// and an editor who typed an address would otherwise learn whether it is an
+// administrator's account and when it last signed in.
+func (s *Service) FindFor(ctx context.Context, websiteID int64, email string, admin bool) (*Result, error) {
+	return s.find(ctx, websiteID, email, admin)
+}
+
+func (s *Service) find(ctx context.Context, websiteID int64, email string, accounts bool) (*Result, error) {
 	email = strings.TrimSpace(email)
 	if !ValidEmail(email) {
 		return nil, ErrBadEmail
@@ -206,6 +223,9 @@ func (s *Service) Find(ctx context.Context, websiteID int64, email string) (*Res
 	res.Holders = holders
 	sources = append(sources, plugins...)
 	for _, src := range sources {
+		if _, staff := src.(accountsSource); staff && !accounts {
+			continue
+		}
 		recs, err := src.Find(ctx, websiteID, email)
 		if err != nil {
 			res.Failed = append(res.Failed, SourceError{Source: src.Name(), Err: err})
