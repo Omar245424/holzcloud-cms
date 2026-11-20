@@ -440,11 +440,15 @@ func (h *Handler) HandlePrivacyErased(w http.ResponseWriter, r *http.Request) er
 	if err != nil || !ok {
 		return err
 	}
+	// Taken out only on its own website's page: another website's result
+	// page, opened first, must not throw away the result of the erasure
+	// just made.
 	var rep erasedReport
-	raw := h.sm.PopString(r.Context(), sessionKeyErased)
+	raw := h.sm.GetString(r.Context(), sessionKeyErased)
 	if raw == "" || json.Unmarshal([]byte(raw), &rep) != nil || rep.WebsiteID != ws.ID {
 		return h.redirect(w, r, privacyAddress(ws.ID))
 	}
+	h.sm.Remove(r.Context(), sessionKeyErased)
 	data := privacyErasedData{
 		LayoutData: web.NewLayoutData(r, h.sm, web.Titlef(r, "Erasure done – %s", ws.Name)),
 		WebsiteID:  ws.ID,

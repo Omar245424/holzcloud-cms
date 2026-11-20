@@ -217,6 +217,28 @@ func TestErasingAnOrderFromThePage(t *testing.T) {
 	}
 }
 
+// The result belongs to the website it was made on: opening another
+// website's result page first does not throw it away.
+func TestAnotherWebsitesResultPageLeavesTheResult(t *testing.T) {
+	h, sm, database, ws := eraseAdmin(t)
+	other, err := h.domains.CreateWebsite(context.Background(), "Andere", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	privacyOrder(t, database, ws.ID, "2026-0043", "ada@example.com", "Ada Lovelace")
+	c := &eraseClient{t: t, h: h, sm: sm, fresh: true}
+	if _, bad := c.post(ws.ID, url.Values{"email": {"ada@example.com"}, "quelle": {"orders"}}, false); bad != "" {
+		t.Fatalf("flash %q", bad)
+	}
+	if rec := c.get(h.HandlePrivacyErased, erasedPage(other.ID), other.ID); rec.Code != http.StatusSeeOther {
+		t.Fatalf("the other website's result page: %d, want 303 to its Privacy screen", rec.Code)
+	}
+	res := c.get(h.HandlePrivacyErased, erasedPage(ws.ID), ws.ID)
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), "2026-0043") {
+		t.Errorf("the result is gone after another website's result page: %d", res.Code)
+	}
+}
+
 func TestTheErasurePageHasNoConfirmAttribute(t *testing.T) {
 	h, sm, database, ws := eraseAdmin(t)
 	privacyOrder(t, database, ws.ID, "2026-0042", "ada@example.com", "Ada Lovelace")
