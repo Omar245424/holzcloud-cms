@@ -449,9 +449,16 @@ page to print or save as a PDF, with what an erasure kept and until when
 
 Both speak the website's main language, not the operator's — they are for the
 person; a Spanish website and one in a language without a catalogue answer in
-English (`TestTheExportIsInTheWebsitesLanguage`). Neither carries a secret: no
-password hash, no second-factor secret or recovery code, no order's
-confirmation token (`TestTheExportCarriesNoSecret`). Both are answered with
+English (`TestTheExportIsInTheWebsitesLanguage`). Neither carries a password
+hash, a second-factor secret or a recovery code, and an order's own record
+leaves out its confirmation token (`TestTheExportCarriesNoSecret`). **One
+exception, known and not yet closed:** an order mail is handed over as it was
+written, and the order confirmation links the order's page with that token
+in its text. While the mail is still in the queue — a sent one stays there
+for 90 days — the export and the printable answer carry a link that opens
+the order's confirmation page; an erasure deletes the mail and replaces the
+token. Send them to the person only, and treat
+them like the database. Both are answered with
 `Cache-Control: no-store` (`TestThePrivacyExportIsADownload`), and each writes
 one `privacy.export` entry in the activity log with the number of records and
 never the address (`TestAnExportLeavesNoAddressInTheLog`).
