@@ -395,3 +395,243 @@ func TestRestoreRefusesDatesThatCannotBe(t *testing.T) {
 		}
 	}
 }
+
+// The data requests of Phase 33.2 (D-01, D-09): access, correction and
+// erasure, in the table the opt-outs are in. Every helper below starts with
+// request, so plan 02's helpers in this package keep theirs apart.
+
+// requestAgo stores a request through Add and moves its arrival back by d,
+// so that a test can put it inside or outside a window.
+func requestAgo(t *testing.T, s *Store, database *db.DB, r Request, d time.Duration) int64 {
+	t.Helper()
+	id := add(t, s, r)
+	at := time.Now().Add(-d).UTC().Format(timeLayout)
+	if _, err := database.Write.Exec(`UPDATE privacy_requests SET created_at = $1 WHERE id = $2`, at, id); err != nil {
+		t.Fatalf("pin created_at: %v", err)
+	}
+	return id
+}
+
+func TestADataRequestNeedsAnAddress(t *testing.T) {
+	s, database := newTestStore(t)
+	ctx := context.Background()
+	ws := website(t, database, "A")
+
+	if _, err := s.Add(ctx, Request{WebsiteID: ws, Kind: KindAccess, Name: "Ada"}); !errors.Is(err, ErrNeedsEmail) {
+		t.Errorf("an access request with a name and no address: %v; want ErrNeedsEmail", err)
+	}
+	if err := Check(Request{WebsiteID: ws, Kind: KindErasure, Name: "Ada", GPC: true}); !errors.Is(err, ErrNeedsEmail) {
+		t.Errorf("Check of an erasure request without an address: %v; want ErrNeedsEmail", err)
+	}
+	// An opt-out still needs no address: a name or the signal is enough.
+	if err := Check(Request{WebsiteID: ws, Kind: KindOptOut, Name: "Ada"}); err != nil {
+		t.Errorf("an opt-out with a name only: %v; want it accepted", err)
+	}
+
+	id := add(t, s, Request{WebsiteID: ws, Kind: KindAccess, Locale: "de", Email: " ada@example.com "})
+	got, err := s.Get(ctx, ws, id)
+	if err != nil || got == nil {
+		t.Fatalf("Get: %+v, %v", got, err)
+	}
+	if got.Kind != KindAccess || got.Email != "ada@example.com" {
+		t.Errorf("stored %+v; want an access request for ada@example.com", got)
+	}
+	if got.Manner != MannerForm || got.Outcome != "" || got.Basis != "" {
+		t.Errorf("manner %q, outcome %q, basis %q; want form, nothing, nothing", got.Manner, got.Outcome, got.Basis)
+	}
+	for _, kind := range DataKinds {
+		if !IsDataKind(kind) {
+			t.Errorf("IsDataKind(%q) = false", kind)
+		}
+	}
+	if IsDataKind(KindOptOut) || IsDataKind("") {
+		t.Error("an opt-out or nothing counts as a data request")
+	}
+}
+
+// The hourly ceiling of a form counts the requests that form takes: the
+// three kinds of the data request form together, and the opt-outs apart.
+// One form flooded must not close the other.
+func TestDataRequestsShareOneCeiling(t *testing.T) {
+	s, database := newTestStore(t)
+	ctx := context.Background()
+	ws := website(t, database, "A")
+	for _, kind := range []string{KindAccess, KindAccess, KindErasure, KindErasure, KindCorrection} {
+		requestAgo(t, s, database, Request{WebsiteID: ws, Kind: kind, Email: "ada@example.com"}, 10*time.Minute)
+	}
+	// Older than the window: not counted.
+	requestAgo(t, s, database, Request{WebsiteID: ws, Kind: KindAccess, Email: "old@example.com"}, 2*time.Hour)
+
+	hourAgo := time.Now().Add(-time.Hour)
+	if _, err := s.AddWithin(ctx, Request{WebsiteID: ws, Kind: KindCorrection, Email: "bea@example.com"}, hourAgo, 5); !errors.Is(err, ErrLimit) {
+		t.Errorf("a sixth data request under a ceiling of five: %v; want ErrLimit", err)
+	}
+	if n, err := s.CountSince(ctx, ws, KindCorrection, hourAgo); err != nil || n != 5 {
+		t.Errorf("CountSince(correction) = %d, %v; want 5, the whole family", n, err)
+	}
+	if _, err := s.AddWithin(ctx, Request{WebsiteID: ws, Kind: KindOptOut, Name: "Cleo"}, hourAgo, 5); err != nil {
+		t.Errorf("an opt-out under the same ceiling: %v; want it stored, its family counts opt-outs only", err)
+	}
+	if n, err := s.CountSince(ctx, ws, KindOptOut, hourAgo); err != nil || n != 1 {
+		t.Errorf("CountSince(optout) = %d, %v; want 1", n, err)
+	}
+}
+
+func TestAnAnswerIsRecordedOnce(t *testing.T) {
+	s, database := newTestStore(t)
+	ctx := context.Background()
+	ws := website(t, database, "A")
+	other := website(t, database, "B")
+	id := add(t, s, Request{WebsiteID: ws, Kind: KindAccess, Email: "ada@example.com"})
+	optout := add(t, s, Request{WebsiteID: ws, Kind: KindOptOut, Name: "Ada"})
+	foreign := add(t, s, Request{WebsiteID: other, Kind: KindAccess, Email: "ada@example.com"})
+
+	if err := s.Answer(ctx, ws, id, "maybe", ""); !errors.Is(err, ErrBadOutcome) {
+		t.Errorf("outcome maybe: %v; want ErrBadOutcome", err)
+	}
+	if err := s.Answer(ctx, ws, id, OutcomeRefused, strings.Repeat("b", MaxBasis+1)); !errors.Is(err, ErrTooLong) {
+		t.Errorf("a basis one longer than allowed: %v; want ErrTooLong", err)
+	}
+	if err := s.Answer(ctx, ws, optout, OutcomeGranted, ""); !errors.Is(err, ErrBadKind) {
+		t.Errorf("an answer to an opt-out: %v; want ErrBadKind", err)
+	}
+	if err := s.Answer(ctx, ws, foreign, OutcomeGranted, ""); !errors.Is(err, ErrNotFound) {
+		t.Errorf("an id of another website: %v; want ErrNotFound", err)
+	}
+	if got, _ := s.Get(ctx, other, foreign); got == nil || got.Outcome != "" || got.HandledAt != nil {
+		t.Errorf("the other website's request was changed: %+v", got)
+	}
+
+	if err := s.Answer(ctx, ws, id, OutcomeGranted, " copy sent "); err != nil {
+		t.Fatalf("Answer: %v", err)
+	}
+	first, err := s.Get(ctx, ws, id)
+	if err != nil || first == nil {
+		t.Fatalf("Get: %+v, %v", first, err)
+	}
+	if first.Outcome != OutcomeGranted || first.Basis != "copy sent" || first.HandledAt == nil {
+		t.Fatalf("after the answer: outcome %q, basis %q, handled %v; want granted, copy sent, a time",
+			first.Outcome, first.Basis, first.HandledAt)
+	}
+
+	if err := s.Answer(ctx, ws, id, OutcomeRefused, "changed my mind"); !errors.Is(err, ErrAnswered) {
+		t.Errorf("a second answer: %v; want ErrAnswered", err)
+	}
+	again, _ := s.Get(ctx, ws, id)
+	if again.Outcome != OutcomeGranted || again.Basis != "copy sent" || !again.HandledAt.Equal(*first.HandledAt) {
+		t.Errorf("a second answer changed the record: %+v", again)
+	}
+}
+
+// ListData lists the three kinds of data request of one website, newest
+// first, and neither the opt-outs nor another website's requests.
+func TestListDataListsTheDataRequests(t *testing.T) {
+	s, database := newTestStore(t)
+	ctx := context.Background()
+	ws := website(t, database, "A")
+	other := website(t, database, "B")
+	older := requestAgo(t, s, database, Request{WebsiteID: ws, Kind: KindErasure, Email: "ada@example.com"}, 2*time.Hour)
+	newer := requestAgo(t, s, database, Request{WebsiteID: ws, Kind: KindAccess, Email: "bea@example.com"}, time.Hour)
+	add(t, s, Request{WebsiteID: ws, Kind: KindOptOut, Name: "Cleo"})
+	add(t, s, Request{WebsiteID: other, Kind: KindAccess, Email: "dora@example.com"})
+
+	list, err := s.ListData(ctx, ws)
+	if err != nil {
+		t.Fatalf("ListData: %v", err)
+	}
+	if len(list) != 2 || list[0].ID != newer || list[1].ID != older {
+		t.Errorf("ListData = %+v; want %d then %d", list, newer, older)
+	}
+}
+
+// A request that came by letter is entered by the operator, with the day it
+// arrived: that day, not the day it was typed in, starts the deadline.
+func TestARequestByPostIsEntered(t *testing.T) {
+	s, database := newTestStore(t)
+	ctx := context.Background()
+	ws := website(t, database, "A")
+	arrived := time.Now().Add(-72 * time.Hour).UTC().Truncate(time.Second)
+
+	id, err := s.AddReceived(ctx, Request{WebsiteID: ws, Kind: KindErasure, Manner: MannerPost,
+		Name: "Ada", Email: "ada@example.com", CreatedAt: arrived})
+	if err != nil {
+		t.Fatalf("AddReceived: %v", err)
+	}
+	got, err := s.Get(ctx, ws, id)
+	if err != nil || got == nil {
+		t.Fatalf("Get: %+v, %v", got, err)
+	}
+	if !got.CreatedAt.Equal(arrived) || got.Manner != MannerPost || got.Kind != KindErasure || got.Outcome != "" {
+		t.Errorf("stored %+v; want an open erasure request by post, arrived %v", got, arrived)
+	}
+
+	for _, tc := range []struct {
+		name string
+		r    Request
+		want error
+	}{
+		{"by the form", Request{Kind: KindAccess, Manner: MannerForm, Email: "ada@example.com", CreatedAt: arrived}, ErrBadManner},
+		{"no manner", Request{Kind: KindAccess, Email: "ada@example.com", CreatedAt: arrived}, ErrBadManner},
+		{"by fax", Request{Kind: KindAccess, Manner: "fax", Email: "ada@example.com", CreatedAt: arrived}, ErrBadManner},
+		{"tomorrow", Request{Kind: KindAccess, Manner: MannerPhone, Email: "ada@example.com", CreatedAt: time.Now().Add(24 * time.Hour)}, ErrFutureTime},
+		{"no date", Request{Kind: KindAccess, Manner: MannerPhone, Email: "ada@example.com"}, ErrNoTime},
+		// A year typed wrong — 2004 for 2024 — is refused, not stored as a
+		// request already older than its record's period.
+		{"twenty years ago", Request{Kind: KindAccess, Manner: MannerPost, Email: "ada@example.com", CreatedAt: time.Now().AddDate(-20, 0, 0)}, ErrPastTime},
+		{"beyond the period", Request{Kind: KindAccess, Manner: MannerPost, Email: "ada@example.com", CreatedAt: time.Now().AddDate(0, -requestFloor, -1)}, ErrPastTime},
+		{"an opt-out", Request{Kind: KindOptOut, Manner: MannerEmail, Name: "Ada", CreatedAt: arrived}, ErrBadKind},
+		{"no address", Request{Kind: KindAccess, Manner: MannerEmail, Name: "Ada", CreatedAt: arrived}, ErrNeedsEmail},
+		{"not an address", Request{Kind: KindAccess, Manner: MannerEmail, Email: "ada@example.com?bcc=x", CreatedAt: arrived}, ErrBadEmail},
+	} {
+		tc.r.WebsiteID = ws
+		if _, err := s.AddReceived(ctx, tc.r); !errors.Is(err, tc.want) {
+			t.Errorf("%s: %v; want %v", tc.name, err, tc.want)
+		}
+	}
+	if list, _ := s.ListData(ctx, ws); len(list) != 1 {
+		t.Errorf("%d requests stored; want the one", len(list))
+	}
+}
+
+// TestRestoreKeepsHowARequestWasMadeAndAnswered: a website moved by bundle
+// keeps the § 7101 record of how each request came in and how it was
+// answered (Phase 33.2, plan 07). What the record cannot hold is refused.
+func TestRestoreKeepsHowARequestWasMadeAndAnswered(t *testing.T) {
+	s, database := newTestStore(t)
+	ctx := context.Background()
+	ws := website(t, database, "A")
+	created := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
+	handled := time.Date(2026, 3, 20, 9, 0, 0, 0, time.UTC)
+
+	id, err := s.Restore(ctx, Request{WebsiteID: ws, Kind: KindErasure, Name: "Ada", Email: "ada@example.com",
+		CreatedAt: created, HandledAt: &handled, Manner: MannerPost, Outcome: OutcomePartly, Basis: "invoice kept"})
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	got, err := s.Get(ctx, ws, id)
+	if err != nil || got == nil {
+		t.Fatalf("Get: %v, %v", got, err)
+	}
+	if got.Manner != MannerPost || got.Outcome != OutcomePartly || got.Basis != "invoice kept" {
+		t.Errorf("restored as manner %q, outcome %q, basis %q", got.Manner, got.Outcome, got.Basis)
+	}
+	if !got.CreatedAt.Equal(created) || got.HandledAt == nil || !got.HandledAt.Equal(handled) {
+		t.Errorf("restored dates %v, %v", got.CreatedAt, got.HandledAt)
+	}
+
+	for _, c := range []struct {
+		what string
+		r    Request
+		want error
+	}{
+		{"manner fax", Request{Kind: KindAccess, Name: "Bea", Manner: "fax"}, ErrBadManner},
+		{"outcome maybe", Request{Kind: KindAccess, Name: "Bea", Outcome: "maybe", HandledAt: &handled}, ErrBadOutcome},
+		// Opt-outs are marked handled, not answered.
+		{"an opt-out with an outcome", Request{Kind: KindOptOut, Name: "Bea", Outcome: OutcomeGranted, HandledAt: &handled}, ErrBadOutcome},
+	} {
+		c.r.WebsiteID, c.r.CreatedAt = ws, created
+		if _, err := s.Restore(ctx, c.r); !errors.Is(err, c.want) {
+			t.Errorf("%s: %v, want %v", c.what, err, c.want)
+		}
+	}
+}

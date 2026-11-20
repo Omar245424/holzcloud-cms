@@ -3,6 +3,9 @@
 - [The measures](#the-measures)
 - [No runtime dependencies on third parties](#no-runtime-dependencies-on-third-parties)
 - [Why a holzcloud-CMS site needs no cookie banner](#why-a-holzcloud-cms-site-needs-no-cookie-banner)
+- [Requests about personal data](#requests-about-personal-data)
+- [Retention](#retention)
+- [Record of processing activities](#record-of-processing-activities)
 - [Two-factor authentication](#two-factor-authentication)
 - [Signing in through an identity provider](#signing-in-through-an-identity-provider)
 - [Rights per person](#rights-per-person)
@@ -96,9 +99,10 @@ What that does and does not change:
 - Your privacy notice therefore has to mention the form: what is collected, why,
   and for how long you keep it. Nothing else in holzcloud-CMS needs an entry there.
 
-Delete answered enquiries when you no longer need them; nothing expires them
-automatically, because how long an enquiry stays relevant is a decision only the
-operator can make.
+Answered enquiries are deleted on their own once the website's period for
+form submissions has passed — twelve months unless you set another, under
+Settings → Privacy → Retention ([below](#retention)). How long an enquiry stays
+relevant is your decision; the period is where you write it down.
 
 ### The three public cookies
 
@@ -132,14 +136,16 @@ for something the visitor asked for:
 This is the reading of the research for this release, written into templates;
 it is not legal advice.
 
-Three tests hold the promise that opening a page sets nothing.
+Four tests hold the promise that opening a page sets nothing.
 `TestNoPublicGetSetsACookie` drives all eight shipped themes through the real
-router, over nineteen public addresses (home page, archive, search, 404, shop
-lists, basket, feeds and more), and fails if a plain GET sets a cookie.
+router, over two dozen public addresses (home page, archive, search, 404, shop
+lists, basket, feeds, the Do Not Sell or Share page, the request page and
+more; the list is `publicGetMatrix`), and fails if a plain GET sets a cookie.
 `TestNoPublicGetSetsACookieWithGPC` runs the same addresses again with
-`Sec-GPC: 1`, and `TestTheOptOutPostSetsNoCookie` sends the opt-out form of a
+`Sec-GPC: 1`, `TestTheOptOutPostSetsNoCookie` sends the opt-out form of a
 US website (see [below](#opt-out-requests)) and checks that its answer sets
-none either. A source test, `TestEveryCookieWriterIsAccountedFor`, fails when a
+none either, and `TestTheDataRequestPostSetsNoCookie` does the same for the
+request about one's own data ([below](#the-request-form)). A source test, `TestEveryCookieWriterIsAccountedFor`, fails when a
 file that writes a cookie appears that the privacy text does not list, so a
 fourth cookie cannot go out unmentioned.
 
@@ -352,9 +358,17 @@ date once (`TestMarkingAnOptOutHandledStoresTheDateOnce`). There is no delete:
 neither the screen nor the store can remove a request
 (`TestTheOptOutScreenCannotDelete`, `TestTheStoreCannotDelete`), and the
 assistant connection cannot read them ([AI access](ai-access.md#tools)).
-Retention and deletion arrive with the data-subject requests of the next
-phase, which must keep a US opt-out for at least 24 months (CCPA regulations
-§ 7101).
+The [retention job](#retention) deletes them, and nothing else does: an
+opt-out goes once the website's period for privacy requests has passed,
+counted from the later of its arrival and the day it was marked handled, and
+that period is never shorter than the 24 months CCPA regulations § 7101 ask
+a request's record to be kept (`expireRequests`,
+`TestRequestsAreKeptAtLeast24Months`). A data request nobody has answered is
+never deleted: it is the evidence that an answer is owed. A request entered by
+hand cannot be dated further back than those 24 months, so a year typed wrong
+is refused at the field instead of being expired at the next run
+(`TestARequestByPostIsEntered`, `TestARequestByMailIsEnteredByHand`). The job and the deletion lock below
+count the same way, so neither lets go of a request the other still holds.
 
 Deleting the website does not get round that. A website that received or
 answered a request in the last 24 months cannot be deleted — not from the
@@ -371,6 +385,444 @@ in the future or before it arrived, is not restored and is named in the
 import report (`TestAPrivacyRequestWithImpossibleDatesIsReported`): every
 limit above counts from those dates, so one dated 2099 would close the form
 and lock the website until then.
+
+## Requests about personal data
+
+A person may ask a website what it holds about them, for a copy of it, for a
+correction or for its erasure. This program finds the data, hands it over,
+corrects it and erases it. Whether a request really comes from the person,
+which law applies and what the answer says are the operator's decisions;
+nothing on these screens and nothing in this section is legal advice.
+
+All of it lives under **Settings → Privacy** of one website (German
+"Datenschutz", `/admin/websites/<number>/datenschutz`) and reaches that website
+and no other. Everybody who may enter the website may search and download;
+correcting and erasing need the right to publish, and a person without it is
+refused with the read-only sentence (`TestAnEditorWithoutThePublishingRightCannotCorrect`,
+`TestAnEditorWithoutThePublishingRightCannotErase`). None of it is reachable
+over the assistant connection: a person's data, the requests and the opt-outs
+stay in the admin, and the one privacy tool an AI key has is
+`get_processing_record` ([below](#record-of-processing-activities);
+`TestNoToolReturnsAPersonsData`, `TestThePrivacyScreenIsNotOverMCP`).
+
+### Finding one person's data
+
+The Privacy screen takes one e-mail address and searches everything the
+website keeps under it (`dsr.Service.Find`):
+
+- the shop's orders, and the mails sent about them;
+- the contact messages from before the contact-form plugin (`form_messages`);
+- the website's privacy requests and opt-outs;
+- the mail queue, by recipient and by Reply-To — not the operator's own
+  notification about a data request or an opt-out, which carries the
+  visitor's address in its text only, never in a header; the request itself
+  holds the same details and is listed and kept, and the notification leaves
+  the queue a week after it was sent, or 90 days after it was queued when it
+  never was;
+- the staff accounts that work on this website — for an administrator only:
+  the list of accounts is an administrator's screen, so an editor's search,
+  export and printable answer leave them out
+  (`TestOnlyAnAdministratorSeesAStaffAccount`);
+- what the plugins keep, asked through their `privacy` hook
+  ([plugins/README.md](../plugins/README.md#the-privacy-hook)): the contact
+  form from version 1.6.0 — its messages, the quarantine, the answers of
+  assembled forms and their attachments — and the farm shop from 1.1.0, its
+  orders.
+
+The address has to name somebody — one line with an @ in it — and is searched
+as typed, so an address the shop or a plugin stored in a laxer shape (with a
+name, a slash, two of them) is still found, handed over and erased
+(`TestThePrivacyScreenRefusesWhatIsNotAnAddress`, `TestFindFindsAnAddressAsStored`);
+the checkout itself now takes one bare address only
+(`TestTheCheckoutTakesOneBareAddress`);
+its letter case does not matter (`TestFindIgnoresLetterCase`), and the search
+never reaches another website's records (`TestFindStaysOnItsWebsite`,
+`TestThePrivacyScreenOfAnotherWebsiteShowsNothing`). An answer that leaves
+something out says so. A plugin that keeps data for the website and cannot be
+asked — it has no privacy hook, or it is not running — is listed under "Not
+searched" with the number of its entries, and a store that failed to answer is
+listed under "Could not be searched" (`TestPluginsWithDataAreReported`,
+`TestAFailingSourceIsNamedAndTheWalkGoesOn`,
+`TestThePrivacyScreenNamesWhatItCouldNotSearch`). A plugin's own error never
+reads as "nothing found" (`TestAPrivacyErrorIsNotAnEmptyAnswer`), and a plugin
+asked to find cannot write (`TestFindCannotWrite`).
+
+Above the search the screen says the one thing it cannot do: check that the
+request really comes from the person the address belongs to, before anything
+is sent (GDPR Art. 12(6), Swiss DSV Art. 16(5), CCPA regulations § 7060 ff.).
+
+### Handing it over: the JSON file and the printable answer
+
+**Download as JSON** writes one file with every record found and, beside the
+records, what GDPR Art. 15(1) and DSG Art. 25(2) ask an answer to carry: the
+controller, the frameworks the website follows, and for each kind of record
+found its purpose, legal basis, recipients, retention and source, and the
+person's rights with where to complain. That part comes from the
+[record of processing](#record-of-processing-activities), so the answer and
+the record cannot disagree (`dsr.BuildExport`, `Export.Describe`,
+`TestTheExportDescribesWhatItHolds`). **Printable answer** is the same as a
+page to print or save as a PDF, with what an erasure kept and until when
+(`HandlePrivacyAnswerPrint`, `TestThePrintableAnswer`).
+
+Both speak the website's main language, not the operator's — they are for the
+person; a Spanish website and one in a language without a catalogue answer in
+English (`TestTheExportIsInTheWebsitesLanguage`). Neither carries a secret: no
+password hash, no second-factor secret or recovery code, no order's
+confirmation token (`TestTheExportCarriesNoSecret`). An order mail is handed
+over as it was written, except for the link to the order's page: the order
+confirmation ends with that link, and the part after `/bestellung/` is the
+token, so it is cut out and the link reads `/bestellung/…`. Send them to the
+person only, and treat them like the database. Both are answered with
+`Cache-Control: no-store` (`TestThePrivacyExportIsADownload`), and each writes
+one `privacy.export` entry in the activity log with the number of records and
+never the address (`TestAnExportLeavesNoAddressInTheLog`).
+
+### The request form
+
+`[[datenanfrage]]` on a page of any website, whatever law it follows, places a
+form ([content model](content-model.md#the-request-form)): what the visitor
+asks for — access, correction or erasure —, the address the request is about,
+which is required, and a name and a note, which are not. The Legal pages card
+creates a page that carries it, "Request about my data", in every language of
+the website ([multilingual](multilingual.md#legal-pages-in-several-languages)).
+
+A request is stored in `privacy_requests`, beside the opt-outs: its kind, the
+address, the name and note as typed, the page's language, when it arrived and
+that it came by the form. Like the opt-out it stores **no IP address and no
+user agent**, and sending it sets no cookie
+(`TestTheDataRequestPostSetsNoCookie`). Whether the browser sent Global Privacy
+Control is not stored with it: the signal says nothing about a request for
+access, correction or erasure.
+
+The form is guarded exactly as the [opt-out form](#opt-out-requests) is, by
+the same code (`takeRequest`): the same-origin check, the bounded body, the
+honeypot, the signed time stamp — drawn for this form, so a stamp of one form
+is a forgery on the other —, the per-network budget, which the two forms
+share, the website's hourly ceiling counted inside the insert, and the cap on
+mails to the operator (`TestTheRequestFormRefusesLikeTheOptOut`). The opt-outs
+count against their own ceiling, the three kinds of data request against one.
+
+**The form never reveals anything.** Whatever address was typed, the visitor
+reads the same sentence — recorded, the operator answers after checking that
+it is theirs — and nothing about any person is ever on the page
+(`TestARequestIsStored`); a form that said "we hold nothing for this address"
+would tell anybody whether its owner is a customer. With mail set up and a
+notification address, the operator gets an e-mail in the website's main
+language naming the kind and the date by which it is due, and the visitor's
+address never becomes a Reply-To (`TestTheOperatorIsToldAboutTheRequest`,
+`TestTheOperatorMailNamesTheDueDate`).
+
+### Requests and when they are due
+
+The **Requests** tab lists every request for access, correction or erasure,
+newest first: those from the form, and those that arrived by e-mail, letter,
+telephone or otherwise, which the operator enters by hand with the day they
+came (`TestARequestByMailIsEnteredByHand`). Each row links to the search for
+its address.
+
+Each request shows when it is due, by the frameworks the website follows
+(`dsr.DueFor`):
+
+| Framework | Answer due | Law |
+|---|---|---|
+| European Union, United Kingdom | one month, the same day of the next month | GDPR and UK GDPR Art. 12(3) |
+| Switzerland | 30 days | DSG Art. 25(7), DSV Art. 18 |
+| United States | 45 calendar days; an acknowledgement within 10 business days | CCPA regulations § 7021 |
+
+With several frameworks the earliest date is shown, because answering by it
+meets all of them; a request past it is marked overdue
+(`TestDueDatesFollowTheFrameworks`, `TestTheRequestsScreenShowsWhenEachIsDue`).
+The dates are a reminder and enforce nothing. Each law allows an extension when
+the person is told in time, which is the operator's to decide, and public
+holidays are not counted, so the acknowledgement date says "about".
+
+**The answer is recorded once**: granted, partly or refused, with its basis,
+which a refusal and a partial answer must give. A second answer is refused and
+changes nothing (`TestTheAnswerIsRecordedOnce`, `Store.Answer`). Together with
+the date, the kind and the manner it arrived in, that is the record CCPA
+regulations § 7101 ask for — "the date of request, nature of request, manner in
+which the request was made, the date of the business's response, the nature of
+the response, and the basis for the denial". The record is kept at least 24
+months from the later of arrival and answer ([retention](#retention)), is not
+erased by the person's own erasure, because it is what keeps that erasure from
+being undone by mistake (§ 7022(e)), and is never shared: not over the
+assistant connection, and in a [bundle](import-export.md#what-travels-and-what-does-not)
+only with the website it belongs to.
+
+### Correcting
+
+Every record found carries a "Correct…" disclosure with one small form per
+field it allows, or the sentence why it allows none (`dsr.Service.Correct`,
+`TestTheScreenOffersWhatEachKindAllows`). What may be corrected depends on what
+the record is:
+
+| Record | Corrected | How |
+|---|---|---|
+| Order: e-mail, phone | freely | the invoice does not print them (`TestAnOrdersEmailIsCorrected`) |
+| Order: name, company, VAT number, street, postal code, city, country | yes, with the original kept | the old and the new value go into the activity log, because AO § 146(4) forbids changing a record "in a way that leaves its original content no longer ascertainable"; the notice says that an invoice already issued may need a corrected one (`TestAnInvoiceFieldIsCorrectedWithItsOriginalKept`, `TestAnInvoiceCorrectionKeepsTheOriginalInTheLog`); when the person is erased and the order reduced, both values go from those entries, which keep the field and the order (`TestErasureStripsTheCorrectedValuesOfTheOrder`); the same happens when the order's period ends and the retention run deletes it — every invoice correction older than the order cut-off loses both values (`TestExpiryStripsTheCorrectedValuesOfExpiredOrders`) |
+| An erased order | no | the erasure is one-way (`TestAnErasedOrderCannotBeCorrected`) |
+| Contact message from before the plugin | name, e-mail | what the person wrote stays what they wrote (`TestALegacyFormMessageIsCorrected`) |
+| A plugin's record | the fields the plugin lists | through its privacy hook; a farm-shop order's address counts as an invoice field (`TestAPluginRecordIsCorrectedThroughTheHook`) |
+| Staff account | on its own screen | an administrator gets the link to *Users → Edit* |
+| Privacy request, mail | no | the record of a request and a copy of what was sent (`TestLogsAndAccountsAreNotCorrectedHere`) |
+
+Only an invoice field's entry in the activity log carries values; any other
+correction names the field and nothing else. After an e-mail correction the
+screen comes back under the new address. The forms post the same request with
+or without JavaScript.
+
+### Erasing
+
+**Erase…** on the Privacy screen opens a page, not a dialog: what an erasure of
+this address would do on this website, in three groups — what is deleted, what
+is reduced and what stays of it, and what is kept — with the reason and the law
+for everything that stays, the plugins that could not be asked, and the
+backups and snapshots that still hold the data
+([below](#after-an-erasure-backups-and-snapshots)). The page changes nothing
+(`TestPreviewChangesNothing`). It and the button on it, "Erase now", sit behind
+the [password asked again](#the-password-again-before-the-irreversible) and the
+right to publish (`TestTheErasurePageAsksForThePassword`). There is no
+`hx-confirm`: a dialog that disappears without JavaScript is no question
+before an act that cannot be undone, so the page is the question
+(`TestTheErasurePageHasNoConfirmAttribute`). The erasure re-finds the records
+itself on the website of the address; whatever the form posts names only the
+person's address and the groups ticked (`TestErasureNeverCrossesWebsites`).
+
+**What goes:** the contact messages from before the plugin; the person's mails,
+the order mails and the queue; the contact form's messages, the quarantine
+included, and their attachment files (`TestErasureDeletesFormMessagesAndMail`,
+`TestErasureOfPluginRecords`). A plugin can only name files stored for it:
+an attachment is recorded as the plugin's when it is kept, and a file of
+another website, of the operator's own — the logo, an image on a page — or of
+another plugin is refused and reported, never deleted on the plugin's word
+(`TestAForeignMediaIDIsRefused`, `TestAPluginCannotDeleteTheOperatorsFile`,
+`TestDeleteOwnedRefusesAFileThePluginDidNotStore`). A file that stays on the
+disk is named on the result page (`TestAFileThatStaysIsNamed`).
+
+**What an order keeps.** An order is the seller's copy of an invoice, which
+bookkeeping and tax law make the seller keep (UStG § 14b in Germany, Art. 958f
+CO in Switzerland), and AO § 146(4) forbids changing it so that the original
+can no longer be read. GDPR Art. 17(3)(b) lets exactly what that obligation
+covers stay, "to the extent that processing is necessary … for compliance with
+a legal obligation", and CCPA regulations § 7022(f) ask the rest to go. So an
+erased order keeps the **name, company, VAT number, address, items, amounts,
+payment state, return policy and the customer's note** — what the invoice
+prints — and loses its **e-mail address and phone number**; its mails are
+deleted; its confirmation link's token is replaced by a fresh random one, so
+the old link answers 404 from then on (`TestErasingAnOrderReducesIt`,
+`TestTwoErasedOrdersKeepUniqueTokens`). The order is marked erased with the
+date until which it is kept: 1 January after the period of the
+[seller's country](#how-long-an-order-is-kept) has run from the end of the
+order's year, never earlier than the website's own order period. That date is
+stored with the order, so what the person was told stays true if the period is
+changed later, and the retention job deletes the rest of the order on it and
+not before. The kept fields are used for nothing else. The order screens show
+the order as erased, with both dates and no address to write to, and changing
+its status sends no mail (`TestAnErasedOrderSaysSoAndGetsNoMail`). A farm-shop
+order is reduced the same way by the plugin itself — e-mail and phone go, name,
+address, items, sum and note stay, with the same date
+(`TestTheFarmShopReducesAnErasedOrder`).
+
+**What is kept whole:** the person's privacy requests, as said
+[above](#requests-and-when-they-are-due) (`TestRequestsAreKeptAndSaySo`).
+
+**Staff accounts** are erased only by an administrator who ticks the box, never
+the account of the person erasing, and never the last administrator
+(`TestAccountsOnlyWhenChosenAndNeverYourOwn`,
+`TestOnlyAnAdministratorMayEraseAnAccount`). The activity log keeps the staff
+member's address, because what an account did has to stay attributable
+(GDPR Art. 17(3)(e)); the log's own purge removes it.
+
+When the erasure was opened from an erasure request, that request is answered
+— "granted", or "partly" when something had to stay, with the basis — and a
+request for access or correction is left for its own answer
+(`TestTheRequestIsAnswered`). Whatever the erasure leaves is listed as kept
+with its reason — a group that was not ticked, a staff account only an
+administrator may erase, whether the box was offered or not — and makes the
+answer "partly", never "granted" (`TestWhatTheErasureLeavesIsKeptAndPartly`). The erasure writes one `privacy.erase` entry in
+the activity log with counts and never the address
+(`TestErasureLogsNoAddress`). The result page is shown once; it names what was
+reduced, until when and why, what failed, and the backups.
+
+### After an erasure: backups and snapshots
+
+An erasure changes the live database and the media directory. It does not
+rewrite the copies, because a copy that an erasure could edit would no longer
+be the way back that it exists to be. The erasure page and its result page
+list what still holds the data (`TestTheResultNamesSnapshotsAndBackups`):
+
+- **Pre-upgrade snapshots** (`pre-upgrade-<version>-<stamp>.sqlite` in the data
+  directory), written before an update that migrates the database. The newest
+  five are kept **with no age limit**, so erased data can survive in them for
+  months or years. The pages list each by name and date.
+- **Nightly backups** made by `deploy/backup.sh`, until they age out: after 30
+  days, unless `RETENTION_DAYS` says otherwise. An off-site copy follows its own
+  schedule.
+- **Mail already sent**, which stays in the recipient's mailbox and with the
+  mail provider. It is out of reach.
+
+Keep backups and snapshots for restoring and for nothing else — the ICO calls
+it "beyond use". And **after restoring a backup or snapshot that is older than
+an erasure, repeat the erasure**: the restored database has the data back, and
+its request records are just as old. The program keeps no list of erasures
+outside the database, so it cannot repeat them for you: keep your own note of
+each erasure — the day and the address — until every backup and snapshot older
+than it is gone.
+
+## Retention
+
+What a website no longer needs is deleted on its own, after a period the
+operator sets per website and kind of data, under **Settings → Privacy →
+Retention** (`dsr.Service.Periods`, `HandlePrivacyRetention`):
+
+| Kind | Default | Shortest | Set |
+|---|---|---|---|
+| Form submissions: the contact messages from before the plugin, and the contact form's messages with their attachment files | 12 months | 1 month | per website |
+| Privacy requests and opt-outs, from the later of arrival and answer; a data request nobody has answered stays until it is | 24 months | 24 months (CCPA regulations § 7101) | per website |
+| Orders, the shop's and the farm shop's | the period of the seller's country | the same | per website, in whole years |
+| Staff accounts without a sign-in | 24 months | 1 month | for the whole installation, by an administrator |
+| Failed mail, in both queues | 90 days after it was queued | — | fixed |
+| The server's log | 14 days | — | read-only |
+
+A period the website never chose follows its default, so a default changed in a
+later release reaches it; a chosen one is stored and kept
+(`TestPeriodsHaveDefaults`). Changing a period needs the right to publish and
+the [password asked again](#the-password-again-before-the-irreversible),
+because a shorter period deletes data at the next run without another question
+(`TestChangingAPeriodAsksForThePasswordAndThePublishingRight`). A period below
+its floor is refused at the field; a stored one that a later change of the
+country left below the law's is applied as the law's.
+
+### How long an order is kept
+
+The period follows the **seller's country** — the country of the website's own
+address under Settings → General — because bookkeeping and tax law bind the
+business where it sits, whoever its customers are (`legal.OrderPeriodFor`):
+
+| Seller's country | Period | Law |
+|---|---|---|
+| Switzerland | 10 years | Art. 958f CO; Art. 70(2) with Art. 42(6) VAT Act (MWSTG) |
+| Germany | 8 years | § 147(3) AO, § 257(4) HGB, § 14b UStG, as amended for 2025 |
+| United Kingdom | 6 years | HMRC VAT Notice 700/21 |
+| United States | 3 years | the federal period of limitations the IRS names as the default |
+| any other country | 10 years | none researched; the screen says so |
+
+The period runs from the end of the calendar year of the order: an order may be
+deleted from 1 January of its year plus the period plus one — an order of 2026
+on a German website on 1 January 2035 (`legal.OrderDeletableFrom`,
+`TestOrdersFollowTheSellersCountry`). That is exact in Germany; where the
+business year is not the calendar year it can end up to a year early, and the
+screen says to set a year more. A website may keep orders longer, never
+shorter. What was not researched is not encoded: the periods of other EU member
+states, US state sales-tax rules, and the German rule that the period does not
+end while a tax assessment is open (§ 147(3) AO). Where one of them applies,
+set the longer period yourself. These are the readings of the research for this
+release, not legal advice.
+
+### The job
+
+The job "retention" ticks every hour and runs when a run is due: the last
+successful run started at least 23 hours ago and the hour is a quiet one
+(01:00–05:00 UTC), or it started 30 hours ago or longer whatever the hour, or a
+run since then failed or never finished (`RetentionTick`,
+`TestTheGateRunsOnceADay`). The gate is stored in the database, so a service
+restarted more often than daily still runs once a day.
+
+A run walks every website and kind and deletes in batches, keyed by the
+website (`RunRetention`). It records itself in `retention_runs` — when it
+started and finished, whether it succeeded, how much it deleted — and one row
+per website and kind in `retention_deletions`, with the count and any error;
+the installation's own kinds have no website. One failing kind does not stop
+the others, but the run is then marked failed, the error goes to the journal,
+and the Retention screen names the kind and the cause in a sentence
+(`TestAFailedKindDoesNotStopTheOthers`, `TestTheRetentionScreenShowsAFailedKind`).
+A run interrupted by a restart is closed as failed at the next one, and runs
+older than 90 days are pruned (`TestAnInterruptedRunIsClosed`,
+`TestOldRunsArePruned`). Each run that deleted something leaves one
+`privacy.retention` entry in the activity log per website and one for the
+installation, with counts only (`TestARunLeavesOneActivityEntryPerWebsite`);
+neither the journal nor the stored error ever carries an address, a name or a
+file name (`TestTheJobLogsNoPersonalData`).
+
+**A failure is never silent.** When the job has not finished a run
+successfully for more than 48 hours — counted from the later of its last
+success and the moment the installation first checked for it
+(`retention.since`), so a job that never ran is late too — every administrator's dashboard shows a warning that names
+`journalctl -u holzcloud`, and every Retention screen shows it to whoever opens
+it (`RetentionStatus`, `TestAnAdministratorIsWarnedAboutAStalledRetention`,
+`TestTheRetentionScreenWarnsWhenOverdue`). The Retention screen also shows the
+last run, what it deleted per kind, and the plugins that keep data and do not
+answer the privacy hook: the job cannot delete what they keep, and the screen
+says so (`TestTheRetentionScreenNamesPluginsTheJobCannotReach`).
+
+**Plugins.** The contact form deletes its messages with their attachments and
+the farm shop its orders when the job asks, through the privacy hook; the farm
+shop never deletes an order before a date an erasure stored
+(`TestPluginFormSubmissionsExpireWithTheirFiles`,
+`TestTheFarmShopExpiresOnlyAfterTheRetentionDate`).
+
+**Accounts** are installation-wide, so their period is one setting for the
+whole installation, changed by an administrator with the password asked again
+(`HandleRetentionAccounts`, `TestOnlyAnAdministratorWithAFreshPasswordSetsTheAccountPeriod`).
+A staff account that has not signed in for longer — or was never used since it
+was created — is deleted with its sessions ended. **An administrator is never
+deleted automatically**; the screen counts the administrators who are past the
+period instead (`TestInactiveAccountsAreDeletedButNeverAdministrators`).
+
+**Failed mail** — a mail of either queue that was never sent — is deleted 90
+days after it was queued (`TestFailedMailIsDeletedAfter90Days`).
+
+**Logs** are not the program's to delete. The journal keeps them for 14 days by
+the journald drop-in `deploy/journald-holzcloud.conf`, which is system-wide
+([the request log](#the-request-log)); the Retention screen shows the period
+read-only.
+
+## Record of processing activities
+
+GDPR Art. 30(1) and the Swiss DSG Art. 12(2) ask a controller to keep a record
+of what it processes: the controller, the purposes, the categories of people
+and of data, the recipients, transfers abroad, when data is erased and how it
+is protected. **Settings → Privacy → Record of processing** generates it per website on
+every visit, from what the website uses, the plugins that keep data for it,
+the frameworks it follows and the periods it keeps — the same facts its privacy
+page is composed from, so the record does not drift from the notice
+(`dsr.BuildRecord`, `TestTheRecordFollowsWhatTheWebsiteUses`,
+`TestTheRecordStatesThePeriodsItKeeps`). It is shown on screen in the
+operator's language, as a page to print or save as a PDF, and as JSON
+(`HandlePrivacyRecord`, `HandlePrivacyRecordPrint`, `HandlePrivacyRecordJSON`,
+`TestTheRecordScreenAndItsExports`).
+
+- **Activities.** Always: delivering the website (the server's log), requests
+  and opt-outs, staff accounts and the activity log, e-mail sent by the
+  website, backups. When the website uses them: contact forms, shop orders,
+  orders through the farm shop, online payment, protected pages. Each with its
+  purpose, the people and data concerned, the legal basis per framework
+  (GDPR and UK GDPR Art. 6(1), FADP Art. 31), recipients, transfers and
+  retention. A plugin the record cannot describe gets an activity of its own,
+  to be filled in.
+- **Security measures**, from what this repository enforces and this
+  document describes: Argon2id, the second factor for administrators,
+  sessions renewed at every sign-in, CSRF protection, the `default-src 'self'`
+  policy and nothing loaded from other servers, the password asked again,
+  backups with SHA-256 checksums, shortened addresses in the request log — and
+  the TLS of the proxy in front, to be filled in.
+- **Exemptions**, per framework: GDPR and UK GDPR Art. 30(5) exempt an
+  organisation under 250 people unless the processing is not occasional, which
+  an online shop's is read to be; DSV Art. 24 exempts one under 250 in
+  Switzerland unless it processes sensitive data on a large scale or profiles
+  at high risk; US law asks for no such record. The record is offered either
+  way (`TestTheRecordNamesTheExemptions`).
+- **Fill-ins.** What the program cannot know is marked "(to be filled in)" and
+  never guessed: the hosting, mail and backup providers, the country the
+  server stands in, a data protection officer, a representative, the TLS of
+  the proxy in front. The one provider it names is Payrexx, because that is the
+  one the program integrates (`TestTheRecordInventsNoProvider`).
+
+The person's export and printable answer take their purposes, recipients and
+retention from this record ([above](#handing-it-over-the-json-file-and-the-printable-answer)).
+An AI key reads the record with `get_processing_record`
+([AI access](ai-access.md#tools)); it is the only privacy tool, and it takes
+no address.
 
 ## Two-factor authentication
 
@@ -523,6 +975,13 @@ What that covers in the corners, since version 0.1.5:
   is told and refuses its own changes to the website, so orders, messages and
   the not-found log stay workable. Any other plugin's screen opens read-only, and
   the server refuses every change made on it by such a person.
+- **Privacy** (Settings → Privacy): finding a person's data and downloading
+  it stay open, so the person can be answered; correcting it, erasing it and
+  changing a retention period are refused
+  (`TestAnEditorWithoutThePublishingRightCannotCorrect`,
+  `TestAnEditorWithoutThePublishingRightCannotErase`,
+  `TestChangingAPeriodAsksForThePasswordAndThePublishingRight`). A staff
+  account is erased only by an administrator.
 - **AI keys are not limited by this right.** An AI key belongs to no person, and
   only an administrator can issue one, so there is nobody's publishing right to
   apply to it. The MCP tools answer exactly as they did before.
@@ -581,14 +1040,21 @@ destroy something**:
 - deleting a user
 - issuing an AI key
 - removing a plugin
+- erasing a person's data ([above](#erasing)) — the erasure page itself, so
+  the question comes before the list of what will go
+- changing a website's retention periods, or the installation's period for
+  staff accounts ([above](#retention)), because a shorter period deletes at
+  the next run of the job
 
 Then comes a screen asking for the password; afterwards you are confirmed for 15
 minutes and land back where you were. The button is not silently completed for
 you — you press it again, and this time it works. That saves a session full of
 parked forms and is more honest.
 
-Deliberately four buttons. A prompt that comes up everywhere is one nobody reads,
-and then it protects nothing.
+Deliberately few buttons. A prompt that comes up everywhere is one nobody reads,
+and then it protects nothing. `TestSensitiveRoutesAskForThePasswordAgain` holds
+the whole list, which also covers accounts, the second factor, uploads and
+imports.
 
 ## Protected pages and preview links
 

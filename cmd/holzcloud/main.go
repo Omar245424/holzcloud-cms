@@ -256,6 +256,11 @@ func main() {
 	// The requests visitors make about their data — the opt-outs of a website
 	// that follows US law. Written by the public form, never deleted here.
 	requestStore := dsr.NewStore(database)
+	// The privacy search: everything one website holds about one e-mail
+	// address, across the core's stores and, once the plugin manager is up,
+	// the plugins' (Phase 33.2). Built here beside the requests it reads;
+	// the manager is handed over inside the block that builds it.
+	dataRights := dsr.NewService(database)
 	// Public template loader (created early so admin handler can invalidate cache)
 	publicDefaultFS, err := fs.Sub(staticFS, "templates/public/default")
 	if err != nil {
@@ -300,6 +305,10 @@ func main() {
 	adminHandler.SetValueStore(valueStore)
 	// The Opt-outs screen reads what the public form writes.
 	adminHandler.SetRequestStore(requestStore)
+	// The Privacy screen finds a person's data and downloads it.
+	adminHandler.SetDataRights(dataRights)
+	// The retention job deletes the files of what it expires.
+	dataRights.SetMedia(mediaStore, cfg.DataDir)
 	adminHandler.SetWording(wordingStore)
 	adminHandler.SetProductStore(productStore)
 	adminHandler.SetOrderStore(orderStore)
@@ -335,7 +344,11 @@ func main() {
 	adminHandler.SetAITokens(aiTokens)
 	// The activity log. It hangs off nothing but the database, which is why it
 	// stands here and not further down among the services that need each other.
-	adminHandler.SetActivityStore(activity.NewStore(database))
+	// One store, handed to the admin and to the retention job, which writes a
+	// summary of every run that deleted something (Phase 33.2, plan 07).
+	activityStore := activity.NewStore(database)
+	adminHandler.SetActivityStore(activityStore)
+	dataRights.SetActivity(activityStore)
 	// The assistant's tools go through the same handler the screens use,
 	// wherever a screen does more than one store call — see internal/admin/ops.go.
 	aiServer, aiUpload := aiConnection(cfg, ai.Deps{
@@ -374,6 +387,7 @@ func main() {
 			pluginManager = m
 			pluginRT = pluginRuntime
 			adminHandler.SetPlugins(m)
+			dataRights.SetPlugins(m)
 			defer pluginRuntime.Close(context.Background())
 		}
 	}
@@ -411,6 +425,9 @@ func main() {
 
 	// Who may enter which website is needed by both the switcher and the router.
 	userStore := user.NewStore(database, argon2Params)
+	// The retention job deletes staff accounts without a sign-in through the
+	// same store, and ends their sessions (Phase 33.2, D-09).
+	dataRights.SetUsers(userStore, sm)
 
 	readiness := web.NewReadinessProbe(Version, Commit, integrity)
 	readiness.MinFreeBytes = cfg.MinFreeBytes
@@ -639,6 +656,22 @@ func main() {
 					slog.Info("purged expired trash", "pages", n)
 				}
 				return nil
+			},
+		},
+		jobs.Job{
+			// Deletes what a website no longer needs once its period has
+			// passed (Phase 33.2, D-05, D-09). Hourly with a gate stored in
+			// the database, and not every 24 hours: the ticker starts with
+			// the process, so a service restarted more often than daily
+			// would never reach a 24-hour tick. The gate runs it once a day,
+			// at night when it can, and again at the next tick after a
+			// failure; every run is recorded and a failure is returned here
+			// so the journal says so too.
+			Name:       "retention",
+			Every:      time.Hour,
+			RunAtStart: true,
+			Fn: func(ctx context.Context) error {
+				return dataRights.RetentionTick(ctx, time.Now())
 			},
 		},
 		jobs.Job{
@@ -1174,6 +1207,52 @@ func newRouter(d routerDeps) (http.Handler, error) {
 	// publishes, and nothing here deletes (phase 33.1 D-14).
 	adminProtectedMux.HandleFunc("GET /admin/websites/{id}/widersprueche", adminHandler.ErrHandler(adminHandler.HandleOptOutList))
 	adminProtectedMux.HandleFunc("POST /admin/websites/{id}/widersprueche/{requestID}/erledigt", adminHandler.ErrHandler(adminHandler.HandleOptOutHandled))
+	// The Privacy screen: what a website holds about one e-mail address, and
+	// its download. Open to everybody with access to the website, like the
+	// order book and the opt-out list: it reads what those screens show
+	// already and changes nothing (Phase 33.2, DSR-01).
+	adminProtectedMux.HandleFunc("GET /admin/websites/{id}/datenschutz", adminHandler.ErrHandler(adminHandler.HandlePrivacyPerson))
+	adminProtectedMux.HandleFunc("GET /admin/websites/{id}/datenschutz/export.json", adminHandler.ErrHandler(adminHandler.HandlePrivacyExport))
+	// The same answer as a sheet to print and hand to the person, in the
+	// website's language (D-02), open to the same people as the download.
+	adminProtectedMux.HandleFunc("GET /admin/websites/{id}/datenschutz/auskunft", adminHandler.ErrHandler(adminHandler.HandlePrivacyAnswerPrint))
+	// The requests people sent about their data, beside the search: open to
+	// the same people, because reading them publishes nothing (D-01).
+	adminProtectedMux.HandleFunc("GET /admin/websites/{id}/datenschutz/anfragen", adminHandler.ErrHandler(adminHandler.HandlePrivacyRequests))
+	// Entering a request that came by letter and recording an answer publish
+	// nothing either, like marking an opt-out handled.
+	adminProtectedMux.HandleFunc("POST /admin/websites/{id}/datenschutz/anfragen/neu", adminHandler.ErrHandler(adminHandler.HandlePrivacyRequestNew))
+	adminProtectedMux.HandleFunc("POST /admin/websites/{id}/datenschutz/anfragen/{requestID}/antwort", adminHandler.ErrHandler(adminHandler.HandlePrivacyRequestAnswer))
+	// Erasing a person's data (Phase 33.2, DSR-03, D-09). The preview is a
+	// page and the erasure its POST, both behind the password asked again:
+	// the page is the confirmation, so it works without JavaScript and needs
+	// no hx-confirm. The handler refuses the POST to somebody without the
+	// publishing right and keeps the staff account to administrators. The
+	// result is shown once to whoever made the erasure, in their session.
+	adminProtectedMux.Handle("GET /admin/websites/{id}/datenschutz/loeschen", requireFresh(http.HandlerFunc(adminHandler.ErrHandler(adminHandler.HandlePrivacyErase))))
+	adminProtectedMux.Handle("POST /admin/websites/{id}/datenschutz/loeschen", requireFresh(http.HandlerFunc(adminHandler.ErrHandler(adminHandler.HandlePrivacyErase))))
+	adminProtectedMux.HandleFunc("GET /admin/websites/{id}/datenschutz/geloescht", adminHandler.ErrHandler(adminHandler.HandlePrivacyErased))
+	// Correcting one field of a person's record (Phase 33.2, DSR-02). The
+	// handler refuses it to somebody without the publishing right; no
+	// password is asked again, because a correction can itself be corrected.
+	adminProtectedMux.HandleFunc("POST /admin/websites/{id}/datenschutz/berichtigen", adminHandler.ErrHandler(adminHandler.HandlePrivacyCorrect))
+	// The retention periods. Reading them is open to the same people;
+	// changing one deletes data at the next run of the job, so the POST asks
+	// for the password again and the handler for the publishing right
+	// (Phase 33.2, D-04).
+	adminProtectedMux.HandleFunc("GET /admin/websites/{id}/datenschutz/aufbewahrung", adminHandler.ErrHandler(adminHandler.HandlePrivacyRetention))
+	adminProtectedMux.Handle("POST /admin/websites/{id}/datenschutz/aufbewahrung", requireFresh(http.HandlerFunc(adminHandler.ErrHandler(adminHandler.HandlePrivacyRetention))))
+	// The record of processing activities, on the screen, as a sheet to
+	// print and as JSON (Phase 33.2, DSR-05). It is generated from the
+	// settings and holds no person's data, so it is open to everybody with
+	// access to the website, like the Retention screen.
+	adminProtectedMux.HandleFunc("GET /admin/websites/{id}/datenschutz/verzeichnis", adminHandler.ErrHandler(adminHandler.HandlePrivacyRecord))
+	adminProtectedMux.HandleFunc("GET /admin/websites/{id}/datenschutz/verzeichnis.json", adminHandler.ErrHandler(adminHandler.HandlePrivacyRecordJSON))
+	adminProtectedMux.HandleFunc("GET /admin/websites/{id}/datenschutz/verzeichnis/drucken", adminHandler.ErrHandler(adminHandler.HandlePrivacyRecordPrint))
+	// The account period is the installation's: it applies to the staff of
+	// every website, and a shorter one deletes accounts at the next run, so
+	// only an administrator sets it, with the password again (D-09).
+	adminProtectedMux.Handle("POST /admin/aufbewahrung/konten", requireAdmin(requireFresh(http.HandlerFunc(adminHandler.ErrHandler(adminHandler.HandleRetentionAccounts)))))
 	adminProtectedMux.Handle("GET /admin/websites/{id}/shop", requireAdmin(http.HandlerFunc(adminHandler.ErrHandler(adminHandler.HandleShopSettings))))
 	adminProtectedMux.Handle("POST /admin/websites/{id}/shop", requireAdmin(http.HandlerFunc(adminHandler.ErrHandler(adminHandler.HandleShopSettings))))
 	// A website's own mail account. Admins only: it holds a password, and
@@ -1473,6 +1552,9 @@ func newRouter(d routerDeps) (http.Handler, error) {
 	// The opt-out form of a website that follows US law. Like /freischalten
 	// it takes no CSRF token, because it rides no session (D-03).
 	publicMux.HandleFunc("POST /widerspruch", publicHandler.ErrHandler(publicHandler.HandleOptOut))
+	// The request form of every website ([[datenanfrage]], Phase 33.2 D-01),
+	// on the opt-out form's machinery and, like it, without a CSRF token.
+	publicMux.HandleFunc("POST /datenanfrage", publicHandler.ErrHandler(publicHandler.HandleDataRequest))
 	// The Global Privacy Control statement of a website that follows US law;
 	// 404 on every other.
 	publicMux.HandleFunc("GET /.well-known/gpc.json", publicHandler.ErrHandler(publicHandler.HandleGPCJSON))

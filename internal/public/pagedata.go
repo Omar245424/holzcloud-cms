@@ -129,6 +129,8 @@ func (h *Handler) pageContent(r *http.Request, websiteID int64, pg *page.Page, s
 	// the browser sent the Global Privacy Control signal — and a widget frozen
 	// into content_html could only ever give one of the two answers.
 	body = h.expandOptOut(r, domain.WebsiteFromContext(r.Context()), pg, body)
+	// The request form of any website, in the same slot for the same reasons.
+	body = h.expandDataRequest(r, domain.WebsiteFromContext(r.Context()), pg, body)
 	// Plugins last: they see the page as a visitor would, with the snippets
 	// already in place and the form already drawn. A filter that ran earlier
 	// would be filtering markers instead of text.
@@ -639,9 +641,9 @@ func (h *Handler) albumsFor(r *http.Request, websiteID int64, body string) album
 // here with theirs already resolved by loadSnippets. A nil map renders every
 // marker as nothing, never as the marker.
 func expandForFeed(html string, snippets snippet.Rendered, albums album.Set, words func(string) string, texts map[string]string) string {
-	// The opt-out marker goes without a widget: a feed reader is not a
+	// The form markers go without a widget: a feed reader is not a
 	// browser that sent a signal, and a form in a feed posts nowhere useful.
-	return withoutOptOut(value.Resolve(block.ResolveWords(album.Expand(snippet.Expand(html, snippets.HTML), albums), words), texts))
+	return withoutDataRequest(withoutOptOut(value.Resolve(block.ResolveWords(album.Expand(snippet.Expand(html, snippets.HTML), albums), words), texts)))
 }
 
 // contentModTime is the validator for conditional requests.

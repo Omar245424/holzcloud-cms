@@ -1,0 +1,122 @@
+{{define "privacy_record_print"}}<!DOCTYPE html>
+<html lang="{{lang}}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{t "Record of processing activities"}} – {{.WebsiteName}}</title>
+    <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+    <meta name="robots" content="noindex, nofollow">
+    {{template "privacy_print_style"}}
+</head>
+<body>
+    {{/* Kein Druckknopf: er bräuchte ein Skript, und der Admin-Bereich lässt
+         keines im Dokument zu (wie order_print.html). */}}
+    <div class="toolbar">
+        <a href="{{.ScreenURL}}">{{t "Back to the record"}}</a>
+        <span class="hint">{{t "To print or save as a PDF: Ctrl + P (Mac: ⌘ + P)"}}</span>
+    </div>
+
+    <main class="sheet">
+        <h1>{{t "Record of processing activities"}}</h1>
+        <p class="meta">{{.WebsiteName}} · {{tf "Generated on %s." .Generated}}</p>
+        <p class="meta">{{t "Generated from what this website uses, the legal frameworks it follows and the retention periods it keeps. It changes when they change. Complete what is marked as to be filled in on the printed copy or in the JSON file."}}</p>
+
+        <h2>{{t "Controller"}}</h2>
+        <table class="rows">
+            {{range .Controller}}<tr><th scope="row">{{t .Label}}</th><td>{{.Value}}</td></tr>{{end}}
+        </table>
+
+        {{range .Record.Activities}}
+        <section class="activity">
+            <h2>{{.Name}}</h2>
+            <table class="rows">
+                <tr><th scope="row">{{t "Purpose"}}</th><td>{{.Purpose}}</td></tr>
+                <tr><th scope="row">{{t "Data subjects"}}</th><td>{{.Subjects}}</td></tr>
+                <tr><th scope="row">{{t "Categories of data"}}</th><td>{{.Data}}</td></tr>
+                <tr><th scope="row">{{t "Legal basis"}}</th><td>{{.LegalBasis}}</td></tr>
+                <tr><th scope="row">{{t "Recipients"}}</th><td>{{.Recipients}}</td></tr>
+                <tr><th scope="row">{{t "Transfers abroad"}}</th><td>{{.Transfers}}</td></tr>
+                <tr><th scope="row">{{t "Retention"}}</th><td>{{.Retention}}</td></tr>
+            </table>
+        </section>
+        {{end}}
+
+        <section class="activity">
+            <h2>{{t "Security measures"}}</h2>
+            <ul>{{range .Record.Security}}<li>{{.}}</li>{{end}}</ul>
+        </section>
+
+        {{if .Record.Exemptions}}
+        <section class="activity">
+            <h2>{{t "Exemptions"}}</h2>
+            <ul>{{range .Record.Exemptions}}<li>{{.Text}}</li>{{end}}</ul>
+        </section>
+        {{end}}
+    </main>
+</body>
+</html>
+{{end}}
+
+{{/*
+  Die Druckregeln der beiden Datenschutz-Blätter (Verzeichnis und Auskunft).
+  Eigene Regeln statt admin.css, wie order_print.html: das Blatt geht auf
+  Papier, die Navigation des Admin-Bereichs hat dort nichts verloren.
+*/}}
+{{define "privacy_print_style"}}
+<style>
+  :root { --ink: #111; --muted: #555; --line: #ccc; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.45;
+    color: var(--ink);
+    background: #f5f5f5;
+    padding: 2rem 1rem;
+  }
+  .sheet {
+    max-width: 21cm;
+    margin: 0 auto;
+    padding: 2cm;
+    background: #fff;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+  }
+  .toolbar {
+    max-width: 21cm;
+    margin: 0 auto 1rem;
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+  .toolbar .hint { font-size: 0.85rem; color: var(--muted); }
+  .toolbar a {
+    font: inherit;
+    font-size: 0.9rem;
+    padding: 0.45em 1em;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: #fff;
+    color: inherit;
+    text-decoration: none;
+  }
+  h1 { font-size: 16pt; margin-bottom: 0.3em; }
+  h2 { font-size: 12pt; margin: 1.2em 0 0.4em; }
+  h3 { font-size: 10.5pt; margin: 0.9em 0 0.3em; }
+  p { margin-bottom: 0.5em; }
+  .meta { font-size: 9.5pt; color: var(--muted); }
+  ul { padding-left: 1.2em; }
+  li { margin-bottom: 0.25em; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; vertical-align: top; padding: 0.35em 0.5em 0.35em 0; border-bottom: 1px solid var(--line); }
+  td { white-space: pre-line; }
+  .rows th { width: 30%; font-weight: 600; color: var(--muted); font-size: 9.5pt; }
+  .list th { font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); border-bottom: 1px solid var(--ink); }
+  @media print {
+    body { background: #fff; padding: 0; }
+    .sheet { box-shadow: none; margin: 0; padding: 0; max-width: none; }
+    .toolbar { display: none; }
+    .activity, tr { break-inside: avoid; }
+  }
+  @page { size: A4; margin: 1.5cm; }
+</style>
+{{end}}

@@ -1,0 +1,544 @@
+package admin
+
+import (
+	"context"
+	"encoding/json"
+	"html/template"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/alexedwards/scs/v2"
+
+	"github.com/holzcloud/holzcloud-cms/internal/activity"
+	"github.com/holzcloud/holzcloud-cms/internal/ai"
+	"github.com/holzcloud/holzcloud-cms/internal/auth"
+	"github.com/holzcloud/holzcloud-cms/internal/db"
+	"github.com/holzcloud/holzcloud-cms/internal/domain"
+	"github.com/holzcloud/holzcloud-cms/internal/dsr"
+	"github.com/holzcloud/holzcloud-cms/internal/i18n"
+	"github.com/holzcloud/holzcloud-cms/internal/user"
+)
+
+// The Privacy screen (Phase 33.2, plan 01). Every helper of this file starts
+// with privacy, so the plans that follow in this package keep theirs apart.
+
+// privacyAdmin is the test handler with the search and the activity log
+// wired the way main.go wires them.
+func privacyAdmin(t *testing.T) (*Handler, *scs.SessionManager, *db.DB, *domain.Website) {
+	t.Helper()
+	h, sm, database, ws := newTestAdmin(t)
+	h.SetDataRights(dsr.NewService(database))
+	h.SetActivityStore(activity.NewStore(database))
+	return h, sm, database, ws
+}
+
+// privacyOrder stores an order the way the shop writes one.
+func privacyOrder(t *testing.T, database *db.DB, websiteID int64, number, email, name string) {
+	t.Helper()
+	res, err := database.Write.Exec(`INSERT INTO orders (website_id, number, token, audience, currency,
+		email, name, street, postal_code, city,
+		items_net, items_tax, items_gross, total_net, total_tax, total_gross,
+		created_at, updated_at)
+		VALUES ($1, $2, $3, 'private', 'CHF', $4, $5, 'Weg 1', '3000', 'Bern',
+		2500, 0, 2500, 2500, 0, 2500, '2026-04-01T08:00:00Z', '2026-04-01T08:00:00Z')`,
+		websiteID, number, "tok-"+number, email, name)
+	if err != nil {
+		t.Fatalf("insert order: %v", err)
+	}
+	id, _ := res.LastInsertId()
+	if _, err := database.Write.Exec(`INSERT INTO order_items (order_id, title, quantity, tax_bp,
+		unit_gross, unit_net, line_net, line_tax, line_gross) VALUES ($1, 'Brett', 1, 0, 2500, 2500, 2500, 0, 2500)`, id); err != nil {
+		t.Fatalf("insert order item: %v", err)
+	}
+}
+
+func privacyScreen(websiteID int64) string {
+	return "/admin/websites/" + strconv.FormatInt(websiteID, 10) + "/datenschutz"
+}
+
+// privacyGet calls a handler of the screen with the path value set.
+func privacyGet(t *testing.T, h *Handler, sm *scs.SessionManager, fn func(http.ResponseWriter, *http.Request) error, target string, websiteID int64) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	req.SetPathValue("id", strconv.FormatInt(websiteID, 10))
+	return serve(t, h, sm, fn, req)
+}
+
+func TestThePrivacyScreenFindsAnOrder(t *testing.T) {
+	h, sm, database, ws := privacyAdmin(t)
+	privacyOrder(t, database, ws.ID, "2026-0042", "Ada@Example.COM", "Ada Lovelace")
+
+	rec := privacyGet(t, h, sm, h.HandlePrivacyPerson, privacyScreen(ws.ID)+"?email=ada@example.com", ws.ID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if want := `href="/admin/websites/` + strconv.FormatInt(ws.ID, 10) + `/bestellungen/2026-0042"`; !strings.Contains(body, want) {
+		t.Errorf("the screen does not link the order: want %s", want)
+	}
+	if !strings.Contains(body, "Ada Lovelace") {
+		t.Error("the screen does not show the customer's name")
+	}
+	if !strings.Contains(body, "datenschutz/export.json?email=ada%40example.com") {
+		t.Error("the screen has no link to the JSON download of this address")
+	}
+
+	empty := privacyGet(t, h, sm, h.HandlePrivacyPerson, privacyScreen(ws.ID), ws.ID)
+	if empty.Code != http.StatusOK {
+		t.Fatalf("without an address: status %d, want 200", empty.Code)
+	}
+	eb := empty.Body.String()
+	if !strings.Contains(eb, `name="email"`) {
+		t.Error("without an address the screen has no search form")
+	}
+	if strings.Contains(eb, "export.json") || strings.Contains(eb, "Ada Lovelace") {
+		t.Error("without an address the screen shows a result")
+	}
+}
+
+func TestThePrivacyScreenRefusesWhatIsNotAnAddress(t *testing.T) {
+	h, sm, _, ws := privacyAdmin(t)
+	rec := privacyGet(t, h, sm, h.HandlePrivacyPerson, privacyScreen(ws.ID)+"?email=nobody", ws.ID)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status %d, want 422", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "form-error") {
+		t.Error("the screen does not say what is wrong with the address")
+	}
+}
+
+func TestThePrivacyExportIsADownload(t *testing.T) {
+	h, sm, database, ws := privacyAdmin(t)
+	privacyOrder(t, database, ws.ID, "2026-0043", "ada@example.com", "Ada Lovelace")
+
+	rec := privacyGet(t, h, sm, h.HandlePrivacyExport, privacyScreen(ws.ID)+"/export.json?email=ADA@example.com", ws.ID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json; charset=utf-8" {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	today := time.Now().UTC().Format("2006-01-02")
+	want := `attachment; filename="personal-data-` + strconv.FormatInt(ws.ID, 10) + "-" + today + `.json"`
+	if cd := rec.Header().Get("Content-Disposition"); cd != want {
+		t.Errorf("Content-Disposition = %q, want %q", cd, want)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", cc)
+	}
+	var got dsr.Export
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("the body is not JSON: %v", err)
+	}
+	if orders := got.Records["orders"]; len(orders) != 1 || orders[0].Key != "2026-0043" {
+		t.Errorf("records.orders = %+v, want the order 2026-0043", got.Records["orders"])
+	}
+
+	for _, bad := range []string{"", "?email=", "?email=nobody", "?email=ada@example.com%0Abcc@example.com"} {
+		rec := privacyGet(t, h, sm, h.HandlePrivacyExport, privacyScreen(ws.ID)+"/export.json"+bad, ws.ID)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%q: status %d, want 400", bad, rec.Code)
+		}
+		if rec.Body.Len() != 0 {
+			t.Errorf("%q: the refusal carries a body: %q", bad, rec.Body.String())
+		}
+	}
+}
+
+// privacyDrive runs one request through the chain main.go builds: the
+// session with the given account, RequireWebsiteAccess, and the two routes
+// registered as main.go registers them.
+func privacyDrive(t *testing.T, h *Handler, sm *scs.SessionManager, database *db.DB, userID int64, target string) *httptest.ResponseRecorder {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /admin/websites/{id}/datenschutz", h.ErrHandler(h.HandlePrivacyPerson))
+	mux.HandleFunc("GET /admin/websites/{id}/datenschutz/export.json", h.ErrHandler(h.HandlePrivacyExport))
+	guarded := auth.RequireWebsiteAccess(sm, NewWebsiteAccessLookup(database))(mux)
+	rec := httptest.NewRecorder()
+	sm.LoadAndSave(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sm.Put(r.Context(), auth.SessionKeyUserID, userID)
+		guarded.ServeHTTP(w, r)
+	})).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+	return rec
+}
+
+func TestThePrivacyScreenOfAnotherWebsiteShowsNothing(t *testing.T) {
+	h, sm, database, a := privacyAdmin(t)
+	ctx := context.Background()
+	b, err := h.domains.CreateWebsite(ctx, "Andere", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	privacyOrder(t, database, a.ID, "2026-0501", "ada@example.com", "Ada auf A")
+	privacyOrder(t, database, b.ID, "2026-0502", "ada@example.com", "Ada auf B")
+
+	users := user.NewStore(database, cheapHashing)
+	editorID, err := users.Create(ctx, "Nur B", "nur-b@example.com", "passwort123", user.RoleEditor)
+	if err != nil {
+		t.Fatalf("create editor: %v", err)
+	}
+	if err := users.SetRights(ctx, editorID, user.Rights{MayPublish: true, Websites: []int64{b.ID}}); err != nil {
+		t.Fatalf("SetRights: %v", err)
+	}
+
+	for _, target := range []string{
+		privacyScreen(a.ID) + "?email=ada@example.com",
+		privacyScreen(a.ID) + "/export.json?email=ada@example.com",
+	} {
+		rec := privacyDrive(t, h, sm, database, editorID, target)
+		if rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
+			t.Errorf("%s: status %d for an editor of B only, want a refusal", target, rec.Code)
+		}
+		if strings.Contains(rec.Body.String(), "Ada auf A") || strings.Contains(rec.Body.String(), "2026-0501") {
+			t.Errorf("%s: the refusal shows website A's order", target)
+		}
+	}
+
+	// The negative control: the same editor on B gets B's order and nothing
+	// of A's, through the same chain.
+	for _, target := range []string{
+		privacyScreen(b.ID) + "?email=ada@example.com",
+		privacyScreen(b.ID) + "/export.json?email=ada@example.com",
+	} {
+		rec := privacyDrive(t, h, sm, database, editorID, target)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status %d, want 200", target, rec.Code)
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, "2026-0502") {
+			t.Errorf("%s: B's order is missing", target)
+		}
+		if strings.Contains(body, "Ada auf A") || strings.Contains(body, "2026-0501") {
+			t.Errorf("%s: B's screen shows website A's order", target)
+		}
+	}
+}
+
+func TestThePrivacyScreenNamesWhatItCouldNotSearch(t *testing.T) {
+	h, sm, database, ws := privacyAdmin(t)
+	if _, err := database.Write.Exec(`INSERT INTO plugins (id, name, version, manifest, sha256, installed_at, updated_at)
+		VALUES ('kontaktformular', 'Kontaktformular', '1.0.0', '{}', '', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		if _, err := database.Write.Exec(`INSERT INTO plugin_store (plugin_id, website_id, key, value, updated_at)
+			VALUES ('kontaktformular', $1, $2, '{}', '2026-01-01T00:00:00Z')`, ws.ID, "nachricht:"+strconv.Itoa(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rec := privacyGet(t, h, sm, h.HandlePrivacyPerson, privacyScreen(ws.ID)+"?email=ada@example.com", ws.ID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, optoutSays("Not searched")) {
+		t.Fatal("the screen has no Not searched section")
+	}
+	section := body[strings.Index(body, optoutSays("Not searched")):]
+	if !strings.Contains(section, "Kontaktformular") {
+		t.Error("the plugin's name is not under Not searched")
+	}
+	if !strings.Contains(section, optoutSays("4 entries")) && !strings.Contains(section, ">4 ") {
+		t.Error("the plugin's entry count is not under Not searched")
+	}
+	if !strings.Contains(section, optoutSays("The plugin is not running on this server.")) {
+		t.Error("the screen does not say why the plugin was not searched")
+	}
+	if strings.Index(body, optoutSays("Not searched")) > strings.Index(body, optoutSays("Download as JSON")) {
+		t.Error("what was not searched comes after the result; it has to come first")
+	}
+
+	// The export says it too.
+	exp := privacyGet(t, h, sm, h.HandlePrivacyExport, privacyScreen(ws.ID)+"/export.json?email=ada@example.com", ws.ID)
+	var got dsr.Export
+	if err := json.Unmarshal(exp.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.NotCovered) != 1 || got.NotCovered[0].Plugin != "kontaktformular" || got.NotCovered[0].Entries != 4 {
+		t.Errorf("not_covered = %+v", got.NotCovered)
+	}
+}
+
+// T-33.2-05: the log records that a person's data was handed out, and how
+// much, never whose. The row outlives an erasure, and a row that kept the
+// address would keep exactly what was erased.
+func TestAnExportLeavesNoAddressInTheLog(t *testing.T) {
+	h, sm, database, ws := privacyAdmin(t)
+	privacyOrder(t, database, ws.ID, "2026-0701", "ada.lovelace@example.com", "Ada Lovelace")
+	privacyOrder(t, database, ws.ID, "2026-0702", "Ada.Lovelace@example.com", "Ada Lovelace")
+
+	rec := privacyGet(t, h, sm, h.HandlePrivacyExport, privacyScreen(ws.ID)+"/export.json?email=ada.lovelace@example.com", ws.ID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200", rec.Code)
+	}
+
+	rows, err := database.Read.Query(`SELECT action, COALESCE(website_id, 0), CAST(id AS TEXT), COALESCE(CAST(user_id AS TEXT), ''),
+		actor_email, entity_type, CAST(entity_id AS TEXT), metadata, created_at
+		FROM activity_log WHERE action = $1`, activity.ActionPrivacyExport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		n++
+		var action string
+		var websiteID int64
+		var id, userID, actor, entityType, entityID, metadata, created string
+		if err := rows.Scan(&action, &websiteID, &id, &userID, &actor, &entityType, &entityID, &metadata, &created); err != nil {
+			t.Fatal(err)
+		}
+		if websiteID != ws.ID {
+			t.Errorf("the entry is for website %d, want %d", websiteID, ws.ID)
+		}
+		var meta map[string]any
+		if err := json.Unmarshal([]byte(metadata), &meta); err != nil {
+			t.Fatalf("metadata %q: %v", metadata, err)
+		}
+		if meta["records"] != float64(2) {
+			t.Errorf("metadata = %s, want records = 2", metadata)
+		}
+		for _, col := range []string{action, id, userID, actor, entityType, entityID, metadata, created} {
+			if strings.Contains(strings.ToLower(col), "lovelace") {
+				t.Errorf("a column of the log entry carries the address: %q", col)
+			}
+		}
+	}
+	if n != 1 {
+		t.Errorf("%d privacy.export entries, want 1", n)
+	}
+
+	// Looking at the screen is not handing data out, and writes nothing.
+	privacyGet(t, h, sm, h.HandlePrivacyPerson, privacyScreen(ws.ID)+"?email=ada.lovelace@example.com", ws.ID)
+	var total int
+	if err := database.Read.QueryRow(`SELECT COUNT(*) FROM activity_log WHERE action = $1`, activity.ActionPrivacyExport).Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 {
+		t.Errorf("%d entries after viewing the screen, want still 1", total)
+	}
+}
+
+// privacyLocale sets the website's main language and makes it a shop that
+// follows EU and CH law.
+func privacyLocale(t *testing.T, database *db.DB, websiteID int64, locale string) {
+	t.Helper()
+	if _, err := database.Write.Exec(`UPDATE websites SET locale = $1, shop_base = 'shop', legal_frameworks = 'eu,ch',
+		country = 'CH', street = 'Dorfstrasse 1', postal_code = '3000', city = 'Bern' WHERE id = $2`, locale, websiteID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The export answers the person, so it speaks the website's language, not
+// the operator's.
+func TestTheExportIsInTheWebsitesLanguage(t *testing.T) {
+	h, sm, database, ws := privacyAdmin(t)
+	privacyLocale(t, database, ws.ID, "fr")
+	privacyOrder(t, database, ws.ID, "2026-0901", "ada@example.com", "Ada Lovelace")
+
+	req := httptest.NewRequest(http.MethodGet, privacyScreen(ws.ID)+"/export.json?email=ada@example.com", nil)
+	req = req.WithContext(i18n.WithLang(req.Context(), "de"))
+	req.SetPathValue("id", strconv.FormatInt(ws.ID, 10))
+	rec := serve(t, h, sm, h.HandlePrivacyExport, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200", rec.Code)
+	}
+	var got dsr.Export
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Lang != "fr" {
+		t.Errorf("lang %q, want fr", got.Lang)
+	}
+	purpose := "Carrying out orders, and keeping the records the law requires."
+	if len(got.Categories) != 1 || got.Categories[0].Kind != "order" {
+		t.Fatalf("categories %+v, want the order's", got.Categories)
+	}
+	if fr := i18n.T("fr", purpose); fr == purpose || got.Categories[0].Purpose != fr {
+		t.Errorf("the order's purpose %q, want the French %q", got.Categories[0].Purpose, fr)
+	}
+	if got.Controller["street"] != "Dorfstrasse 1" {
+		t.Errorf("controller %v", got.Controller)
+	}
+	var rights string
+	for _, r := range got.Rights {
+		rights += r.Text
+	}
+	if !strings.Contains(rights, "PFPDT") || !strings.Contains(rights, "autorité de contrôle") {
+		t.Errorf("rights are not French: %q", rights)
+	}
+
+	// Spanish has no legal texts of its own; a language without a
+	// catalogue neither. Both answer in English.
+	for _, locale := range []string{"es", "rm"} {
+		privacyLocale(t, database, ws.ID, locale)
+		rec := privacyGet(t, h, sm, h.HandlePrivacyExport, privacyScreen(ws.ID)+"/export.json?email=ada@example.com", ws.ID)
+		var got dsr.Export
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Lang != "en" || len(got.Categories) != 1 || got.Categories[0].Purpose != purpose {
+			t.Errorf("%s: lang %q, categories %+v, want English", locale, got.Lang, got.Categories)
+		}
+	}
+}
+
+func TestThePrintableAnswer(t *testing.T) {
+	h, sm, database, ws := privacyAdmin(t)
+	privacyLocale(t, database, ws.ID, "fr")
+	privacyOrder(t, database, ws.ID, "2026-0902", "ada@example.com", "Ada Lovelace")
+	answer := privacyScreen(ws.ID) + "/auskunft"
+
+	req := httptest.NewRequest(http.MethodGet, answer+"?email=ada@example.com", nil)
+	req = req.WithContext(i18n.WithLang(req.Context(), "de"))
+	req.SetPathValue("id", strconv.FormatInt(ws.ID, 10))
+	rec := serve(t, h, sm, h.HandlePrivacyAnswerPrint, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200", rec.Code)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", cc)
+	}
+	body := rec.Body.String()
+	fr := func(s string) string { return template.HTMLEscapeString(i18n.T("fr", s)) }
+	for _, want := range []string{
+		`<html lang="fr">`, "Dorfstrasse 1", "2026-0902", "Ada Lovelace", "noindex",
+		fr("Information about your personal data"),
+		fr("Carrying out orders, and keeping the records the law requires."),
+		"PFPDT",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the answer lacks %q", want)
+		}
+	}
+	for _, nav := range []string{`class="sidebar`, "/admin/logout", `class="section-tabs"`} {
+		if strings.Contains(body, nav) {
+			t.Errorf("the answer carries the admin's navigation (%s)", nav)
+		}
+	}
+
+	for _, bad := range []string{"", "?email=", "?email=nobody"} {
+		rec := privacyGet(t, h, sm, h.HandlePrivacyAnswerPrint, answer+bad, ws.ID)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%q: status %d, want 400", bad, rec.Code)
+		}
+	}
+
+	// One activity entry for the printed answer, with no address in it.
+	var meta string
+	if err := database.Read.QueryRow(`SELECT metadata FROM activity_log WHERE action = $1`, activity.ActionPrivacyExport).Scan(&meta); err != nil {
+		t.Fatalf("no privacy.export entry: %v", err)
+	}
+	if !strings.Contains(meta, `"format":"print"`) || strings.Contains(strings.ToLower(meta), "ada") {
+		t.Errorf("metadata %s", meta)
+	}
+
+	// The Privacy screen links it beside the JSON download.
+	screen := privacyGet(t, h, sm, h.HandlePrivacyPerson, privacyScreen(ws.ID)+"?email=ada@example.com", ws.ID)
+	sb := screen.Body.String()
+	link := `href="` + answer + `?email=ada%40example.com"`
+	if !strings.Contains(sb, link) {
+		t.Fatalf("the Privacy screen has no link %s", link)
+	}
+	if strings.Index(sb, link) < strings.Index(sb, "export.json") {
+		t.Error("the printable answer is not beside the JSON download")
+	}
+}
+
+// The printable answer tells the person until when an erased order is kept
+// by the date stored at the erasure — what they were told then — and prints
+// it as the day it is, on any clock.
+func TestTheAnswerPrintsTheStoredKeptUntilDate(t *testing.T) {
+	h, sm, database, ws := privacyAdmin(t)
+	privacyOrder(t, database, ws.ID, "2026-0921", "ada@example.com", "Ada Lovelace")
+	if _, err := database.Write.Exec(`UPDATE orders SET erased_at = '2026-11-01T00:00:00Z',
+		retain_until = '2039-01-01T00:00:00Z' WHERE number = '2026-0921'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Write.Exec(`UPDATE websites SET timezone = 'America/New_York' WHERE id = $1`, ws.ID); err != nil {
+		t.Fatal(err)
+	}
+	rec := privacyGet(t, h, sm, h.HandlePrivacyAnswerPrint, privacyScreen(ws.ID)+"/auskunft?email=ada@example.com", ws.ID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "01.01.2039") {
+		t.Errorf("the answer does not say the order is kept until 01.01.2039, the date stored at its erasure")
+	}
+	for _, wrong := range []string{"31.12.2038", "01.01.2037", "31.12.2036"} {
+		if strings.Contains(body, wrong) {
+			t.Errorf("the answer prints %s", wrong)
+		}
+	}
+}
+
+// A staff account is the installation's, and the list of accounts is an
+// administrator's screen: the Privacy search, the export and the printable
+// answer show the account to an administrator and to nobody else.
+func TestOnlyAnAdministratorSeesAStaffAccount(t *testing.T) {
+	h, sm, database, ws := privacyAdmin(t)
+	ctx := context.Background()
+	users := user.NewStore(database, cheapHashing)
+	staff, err := users.Create(ctx, "Ada Admin", "ada@example.com", "passwort123", user.RoleAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privacyOrder(t, database, ws.ID, "2026-0911", "ada@example.com", "Ada Lovelace")
+	targets := map[string]func(http.ResponseWriter, *http.Request) error{
+		privacyScreen(ws.ID) + "?email=ada@example.com":             h.HandlePrivacyPerson,
+		privacyScreen(ws.ID) + "/export.json?email=ada@example.com": h.HandlePrivacyExport,
+		privacyScreen(ws.ID) + "/auskunft?email=ada@example.com":    h.HandlePrivacyAnswerPrint,
+	}
+	edit := "/admin/users/" + strconv.FormatInt(staff, 10) + "/edit"
+	shows := func(body string) bool {
+		return strings.Contains(body, edit) || strings.Contains(body, `"accounts"`) ||
+			strings.Contains(body, "Ada Admin")
+	}
+	for _, role := range []string{user.RoleEditor, user.RoleAdmin} {
+		for target, fn := range targets {
+			req := httptest.NewRequest(http.MethodGet, target, nil)
+			req.SetPathValue("id", strconv.FormatInt(ws.ID, 10))
+			rec := httptest.NewRecorder()
+			sm.LoadAndSave(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				sm.Put(r.Context(), auth.SessionKeyUserRole, role)
+				if err := fn(w, r); err != nil {
+					t.Fatalf("%s: %v", target, err)
+				}
+			})).ServeHTTP(rec, req)
+			body := rec.Body.String()
+			if rec.Code != http.StatusOK || !strings.Contains(body, "2026-0911") {
+				t.Fatalf("%s as %s: status %d, or the order is missing", target, role, rec.Code)
+			}
+			if got := shows(body); got != (role == user.RoleAdmin) {
+				t.Errorf("%s as %s: shows the staff account %v", target, role, got)
+			}
+		}
+	}
+}
+
+// 33.1 D-16 carried over: a person's data stays in the admin. No assistant
+// tool searches by address or reads a privacy request.
+func TestThePrivacyScreenIsNotOverMCP(t *testing.T) {
+	h, _, _, _ := newTestAdmin(t)
+	tools := ai.Tools(ai.Deps{
+		Domains: h.domains, Pages: h.pages, Media: h.mediaStore, Fields: h.fields, Ops: h,
+		Limits: ai.Limits{DataDir: h.cfg.DataDir},
+	})
+	if len(tools) < 10 {
+		t.Fatalf("%d tools; the registry was not built, the guard would prove nothing", len(tools))
+	}
+	for _, tool := range tools {
+		name := strings.ToLower(tool.Name)
+		for _, bad := range []string{"person", "personal", "privacy_request"} {
+			if strings.Contains(name, bad) {
+				t.Errorf("tool %q names %q: a person's data is not exposed over MCP", tool.Name, bad)
+			}
+		}
+	}
+}

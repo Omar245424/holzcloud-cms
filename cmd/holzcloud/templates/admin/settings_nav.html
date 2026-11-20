@@ -20,6 +20,9 @@
         <a href="/admin/websites/{{$id}}/werte" class="settings-nav__item{{if eq .ActiveNav "values"}} is-active{{end}}"{{if eq .ActiveNav "values"}} aria-current="page"{{end}}>{{template "icon-fields"}}<span>{{t "Values"}}</span></a>
         <a href="/admin/websites/{{$id}}/redirects" class="settings-nav__item{{if eq .ActiveNav "redirects"}} is-active{{end}}"{{if eq .ActiveNav "redirects"}} aria-current="page"{{end}}>{{template "icon-redirect"}}<span>{{t "Redirects"}}</span></a>
         <a href="/admin/websites/{{$id}}/seo" class="settings-nav__item{{if eq .ActiveNav "seo"}} is-active{{end}}"{{if eq .ActiveNav "seo"}} aria-current="page"{{end}}>{{template "icon-seo"}}<span>{{t "SEO"}}</span></a>
+        {{/* Jeder Reiter des Datenschutzes markiert denselben Eintrag. */}}
+        {{$privacy := or (eq .ActiveNav "privacy") (eq .ActiveNav "privacy-requests") (eq .ActiveNav "privacy-retention")}}
+        <a href="/admin/websites/{{$id}}/datenschutz" class="settings-nav__item{{if $privacy}} is-active{{end}}"{{if $privacy}} aria-current="page"{{end}}>{{template "icon-privacy"}}<span>{{t "Privacy"}}</span></a>
     {{if .NavWebsite.HasUSFramework}}
         <a href="/admin/websites/{{$id}}/widersprueche" class="settings-nav__item{{if eq .ActiveNav "optouts"}} is-active{{end}}"{{if eq .ActiveNav "optouts"}} aria-current="page"{{end}}>{{template "icon-mail"}}<span>{{t "Opt-outs"}}</span></a>
     {{end}}
@@ -91,4 +94,79 @@
     {{end}}
 </nav>
 {{end}}
+{{end}}
+
+{{/*
+  Die Reiter des Datenschutzes einer Website. Jeder Bildschirm darunter bindet
+  sie oben ein; die folgenden Pläne der Phase 33.2 fügen ihre Reiter hier an
+  (Anfragen, Aufbewahrung, Verzeichnis), damit sie an einer Stelle stehen.
+*/}}
+{{define "privacy_tabs"}}
+{{if .NavWebsite}}
+<nav class="section-tabs" aria-label="{{t "Privacy"}}">
+    {{$id := .NavWebsite.ID}}
+    <a href="/admin/websites/{{$id}}/datenschutz" class="section-tab{{if eq .ActiveNav "privacy"}} is-active{{end}}"{{if eq .ActiveNav "privacy"}} aria-current="page"{{end}}>{{t "Find a person"}}</a>
+    <a href="/admin/websites/{{$id}}/datenschutz/anfragen" class="section-tab{{if eq .ActiveNav "privacy-requests"}} is-active{{end}}"{{if eq .ActiveNav "privacy-requests"}} aria-current="page"{{end}}>{{t "Requests"}}</a>
+    <a href="/admin/websites/{{$id}}/datenschutz/aufbewahrung" class="section-tab{{if eq .ActiveNav "privacy-retention"}} is-active{{end}}"{{if eq .ActiveNav "privacy-retention"}} aria-current="page"{{end}}>{{t "Retention"}}</a>
+    <a href="/admin/websites/{{$id}}/datenschutz/verzeichnis" class="section-tab{{if eq .ActiveNav "privacy-record"}} is-active{{end}}"{{if eq .ActiveNav "privacy-record"}} aria-current="page"{{end}}>{{t "Record of processing"}}</a>
+</nav>
+{{end}}
+{{end}}
+
+{{/*
+  Die Warnung, dass der Aufbewahrungs-Job seit mehr als 48 Stunden nicht
+  erfolgreich gelaufen ist (Phase 33.2, D-05, D-09). Sie steht auf der
+  Übersicht (nur für Admins) und auf jedem Aufbewahrungs-Bildschirm, darum hier
+  bei den Reitern und nicht zweimal. Aufgerufen mit einem *retentionWarningView;
+  nil zeigt nichts. Die Sätze nennen das Journal, weil dort steht, warum.
+*/}}
+{{define "retention_warning"}}
+{{with .}}
+<div class="alert alert--warning" role="alert" id="retention-warning">
+    <p>{{if .LastOK}}{{tf "Expired personal data has not been deleted for more than 48 hours: the retention job has not finished successfully since %s. Look in the server's journal (journalctl -u holzcloud) and on a website's Retention screen." (.LastOK.Format "02.01.2006 15:04 MST")}}{{else}}{{t "Expired personal data has not been deleted for more than 48 hours: the retention job has not run since this version was installed. Look in the server's journal (journalctl -u holzcloud)."}}{{end}}</p>
+    {{if .Link}}<p><a href="{{.Link}}">{{t "Open the Retention screen"}}</a></p>{{end}}
+</div>
+{{end}}
+{{end}}
+
+{{/*
+  Ein Eintrag einer Löschung, der gekürzt wird oder bleibt: was geht, was
+  bleibt, warum und bis wann (Phase 33.2, DSR-03). Die Vorschau und die
+  Ergebnisseite zeigen ihn gleich, darum hier und nicht zweimal.
+*/}}
+{{define "erasure_item"}}
+<article style="margin-block-start: var(--space-3);">
+    <h3>{{t .Heading}}: {{t .Label}} {{.Key}}</h3>
+    <dl class="detail-list">
+        {{if .Gone}}<dt>{{t "Goes"}}</dt><dd>{{range $i, $f := .Gone}}{{if $i}}, {{end}}{{t $f}}{{end}}</dd>{{end}}
+        {{if .Kept}}<dt>{{t "Stays"}}</dt><dd>{{range $i, $f := .Kept}}{{if $i}}, {{end}}{{t $f}}{{end}}</dd>{{end}}
+        {{if .Until}}<dt>{{t "Retention"}}</dt><dd>{{tf "Kept until %s" .Until}}</dd>{{end}}
+    </dl>
+    {{if .Reason}}<p class="form-hint">{{t .Reason}}</p>{{end}}
+    {{if .Basis}}<p class="form-hint">{{t .Basis}}</p>{{end}}
+</article>
+{{end}}
+
+{{/*
+  Was Sicherungen und Schnappschüsse noch enthalten (Phase 33.2, D-08). Eine
+  Löschung schreibt sie nicht um – sie sind der Weg zurück nach einem
+  misslungenen Update und die Kopie für eine Wiederherstellung. Darum stehen
+  hier die Schnappschüsse im Datenverzeichnis mit Namen und Datum, wann die
+  nächtlichen Sicherungen ablaufen, und dass eine Löschung nach dem
+  Wiederherstellen einer älteren Sicherung wiederholt werden muss. Vorschau
+  und Ergebnis zeigen es gleich; aufgerufen mit der Liste der Schnappschüsse.
+*/}}
+{{define "erasure_backups"}}
+<section class="card" id="erasure-backups" style="margin-bottom: var(--space-3);">
+    <h2>{{t "Backups and snapshots"}}</h2>
+    {{if .}}
+    <p>{{t "These pre-upgrade snapshots in the data directory still hold the erased data. They are kept until they are removed: the newest five, with no age limit."}}</p>
+    <ul>{{range .}}<li><code>{{.Name}}</code> · <span class="text-muted">{{.Date}}</span></li>{{end}}</ul>
+    {{else}}
+    <p>{{t "No pre-upgrade snapshot is in the data directory."}}</p>
+    {{end}}
+    <p>{{t "Nightly backups made by deploy/backup.sh still hold the erased data until they age out: after 30 days, unless RETENTION_DAYS says otherwise. An off-site copy follows its own schedule. Backups are used only to restore."}}</p>
+    <p>{{t "After restoring a backup older than today, repeat this erasure."}}</p>
+    <p class="text-muted">{{t "Mail already sent stays in the recipient's mailbox and with the mail provider."}}</p>
+</section>
 {{end}}

@@ -151,6 +151,13 @@ func Check(file multipart.File, header *multipart.FileHeader, limits Limits) (*I
 // this website: the same file twice is almost always an accident, and letting
 // the card fill with copies nobody can tell apart is worse than saying so.
 func (in *Intake) Keep(ctx context.Context, store *Store, websiteID int64, dataDir string) (m *Media, existed bool, err error) {
+	return in.KeepFor(ctx, store, websiteID, "", dataDir)
+}
+
+// KeepFor is Keep for a plugin's form, "" for the operator: the file is
+// stored as the plugin's (CreateForPlugin), and the same bytes are found
+// again only among that plugin's files (FindByHashFor).
+func (in *Intake) KeepFor(ctx context.Context, store *Store, websiteID int64, pluginID, dataDir string) (m *Media, existed bool, err error) {
 	// EXIF, XMP and IPTC come off before anything reaches the disk. A photograph
 	// taken at home otherwise publishes the photographer's address, and the
 	// media route serves the stored bytes verbatim for a year.
@@ -165,7 +172,7 @@ func (in *Intake) Keep(ctx context.Context, store *Store, websiteID int64, dataD
 		return nil, false, fmt.Errorf("upload failed: %w", err)
 	}
 
-	if existing, err := store.FindByHash(ctx, websiteID, hash); err != nil {
+	if existing, err := store.FindByHashFor(ctx, websiteID, pluginID, hash); err != nil {
 		os.Remove(destPath)
 		return nil, false, err
 	} else if existing != nil {
@@ -174,7 +181,7 @@ func (in *Intake) Keep(ctx context.Context, store *Store, websiteID int64, dataD
 	}
 
 	// The bytes actually written, never the size the sender claimed.
-	m, err = store.Create(ctx, websiteID, in.Filename, in.OriginalName, in.MimeType, written, hash)
+	m, err = store.CreateForPlugin(ctx, websiteID, pluginID, in.Filename, in.OriginalName, in.MimeType, written, hash)
 	if err != nil {
 		os.Remove(destPath)
 		return nil, false, fmt.Errorf("create media record: %w", err)

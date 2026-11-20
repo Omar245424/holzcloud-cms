@@ -1,0 +1,144 @@
+{{/*
+  Die Auskunft an eine Person als Blatt zum Drucken oder als PDF (Phase 33.2,
+  DSR-01, D-02): dieselben Einträge und dieselbe Beschreibung wie die
+  JSON-Datei, in der Hauptsprache der Website, denn sie geht an die Person und
+  nicht an den Betreiber. Der Handler setzt die Sprache in den Kontext, darum
+  sprechen {{t}} und {{tf}} hier die Sprache der Website.
+
+  Die Druckregeln stehen wie bei privacy_record_print.html im Blatt selbst: ein
+  eigenständiges Blatt wird ohne die anderen Vorlagen geparst. Beide halten
+  dieselben Regeln.
+*/}}
+{{define "privacy_answer_print"}}<!DOCTYPE html>
+<html lang="{{lang}}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{t "Information about your personal data"}} – {{.WebsiteName}}</title>
+    <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+    <meta name="robots" content="noindex, nofollow">
+    <style>
+      :root { --ink: #111; --muted: #555; --line: #ccc; }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        font-size: 10.5pt;
+        line-height: 1.45;
+        color: var(--ink);
+        background: #f5f5f5;
+        padding: 2rem 1rem;
+      }
+      .sheet {
+        max-width: 21cm;
+        margin: 0 auto;
+        padding: 2cm;
+        background: #fff;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+      }
+      .toolbar {
+        max-width: 21cm;
+        margin: 0 auto 1rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: center;
+      }
+      .toolbar .hint { font-size: 0.85rem; color: var(--muted); }
+      .toolbar .warn { flex-basis: 100%; font-size: 0.85rem; color: #8a3b00; }
+      .toolbar a {
+        font: inherit;
+        font-size: 0.9rem;
+        padding: 0.45em 1em;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        background: #fff;
+        color: inherit;
+        text-decoration: none;
+      }
+      h1 { font-size: 16pt; margin-bottom: 0.3em; }
+      h2 { font-size: 12pt; margin: 1.2em 0 0.4em; }
+      h3 { font-size: 10.5pt; margin: 0.9em 0 0.3em; }
+      p { margin-bottom: 0.5em; }
+      .meta { font-size: 9.5pt; color: var(--muted); }
+      ul { padding-left: 1.2em; }
+      li { margin-bottom: 0.25em; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { text-align: left; vertical-align: top; padding: 0.35em 0.5em 0.35em 0; border-bottom: 1px solid var(--line); }
+      td { white-space: pre-line; }
+      .rows th { width: 30%; font-weight: 600; color: var(--muted); font-size: 9.5pt; }
+      .record { break-inside: avoid; }
+      @media print {
+        body { background: #fff; padding: 0; }
+        .sheet { box-shadow: none; margin: 0; padding: 0; max-width: none; }
+        .toolbar { display: none; }
+        .record, .category, tr { break-inside: avoid; }
+      }
+      @page { size: A4; margin: 1.5cm; }
+    </style>
+</head>
+<body>
+    <div class="toolbar">
+        <a href="{{.BackURL}}">{{t "Back to the search"}}</a>
+        <span class="hint">{{t "To print or save as a PDF: Ctrl + P (Mac: ⌘ + P)"}}</span>
+        {{if .NotCovered}}<p class="warn">{{t "These plugins keep data for this website, and the search could not ask them. Look through their entries yourself."}}{{range .NotCovered}} {{.Name}}{{end}}</p>{{end}}
+        {{if .Failed}}<p class="warn">{{t "These stores did not answer. The result below is incomplete; try again later."}}</p>{{end}}
+    </div>
+
+    <main class="sheet">
+        <h1>{{t "Information about your personal data"}}</h1>
+        <p class="meta">{{tf "As of %s" .AsOf}} · {{.Email}}</p>
+
+        <h2>{{t "Controller"}}</h2>
+        <table class="rows">
+            {{range .Controller}}<tr><th scope="row">{{t .Label}}</th><td>{{.Value}}</td></tr>{{end}}
+        </table>
+
+        <h2>{{t "Your data"}}</h2>
+        {{if .Count}}
+        {{range .Groups}}
+        <h3>{{t .Heading}}</h3>
+        {{range .Records}}
+        <section class="record">
+            <table class="rows">
+                <tr><th scope="row">{{t .Label}}</th><td>{{.Key}}{{if not .Time.IsZero}} · {{.Time.Format "02.01.2006 15:04"}}{{end}}</td></tr>
+                {{range .Shown}}<tr><th scope="row">{{t .Label}}</th><td>{{.Value}}</td></tr>{{end}}
+            </table>
+        </section>
+        {{end}}
+        {{end}}
+        {{else}}
+        <p>{{t "No data about this e-mail address was found on this website."}}</p>
+        {{end}}
+
+        {{if .Kept}}
+        <h2>{{t "Kept by law"}}</h2>
+        <p>{{t "Erased; records the law requires are kept, reduced, until their periods end."}}</p>
+        <ul>
+            {{range .Kept}}<li>{{t .Label}} {{.Key}}{{if .Until}} · {{tf "Kept until %s" .Until}}{{end}}</li>{{end}}
+        </ul>
+        {{end}}
+
+        {{if .Categories}}
+        <h2>{{t "How your data is processed"}}</h2>
+        {{range .Categories}}
+        <section class="category">
+            <h3>{{.Activity}}</h3>
+            <table class="rows">
+                <tr><th scope="row">{{t "Purpose"}}</th><td>{{.Purpose}}</td></tr>
+                <tr><th scope="row">{{t "Legal basis"}}</th><td>{{.LegalBasis}}</td></tr>
+                <tr><th scope="row">{{t "Recipients"}}</th><td>{{.Recipients}}</td></tr>
+                <tr><th scope="row">{{t "Retention"}}</th><td>{{.Retention}}</td></tr>
+                <tr><th scope="row">{{t "Source"}}</th><td>{{.Source}}</td></tr>
+            </table>
+        </section>
+        {{end}}
+        {{end}}
+
+        {{if .Rights}}
+        <h2>{{t "Your rights"}}</h2>
+        <ul>{{range .Rights}}<li>{{.Text}}</li>{{end}}</ul>
+        {{end}}
+    </main>
+</body>
+</html>
+{{end}}

@@ -487,6 +487,26 @@ func TestOnlinePaymentIsRejectedWhenNotConfigured(t *testing.T) {
 	}
 }
 
+// An order is stored with one bare address: the confirmation goes there,
+// and the person is found and erased by it later.
+func TestTheCheckoutTakesOneBareAddress(t *testing.T) {
+	v := checkoutValues{
+		Name: "Anna Meier", Street: "Seestrasse 4",
+		PostalCode: "8002", City: "Zürich", Country: "CH",
+		Method: shop.PayInvoice, Accepted: true,
+	}
+	for _, bad := range []string{"Anna <kundin@example.ch>", "a/b@example.ch", "kundin@example.ch, bob@example.ch", "kundin@example.ch?bcc=x", "@@@@@"} {
+		v.Email = bad
+		if errs := v.validate(shop.Private, false); errs["email"] == "" {
+			t.Errorf("the checkout took %q", bad)
+		}
+	}
+	v.Email = "kundin@example.ch"
+	if errs := v.validate(shop.Private, false); len(errs) != 0 {
+		t.Errorf("the checkout refused a bare address: %v", errs)
+	}
+}
+
 func TestPaymentNoteSpeaksToTheCustomer(t *testing.T) {
 	cases := []struct {
 		method, status string

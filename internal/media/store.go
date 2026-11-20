@@ -55,12 +55,20 @@ func scan(row interface{ Scan(...any) error }) (*Media, error) {
 	return &m, nil
 }
 
-// Create inserts a new media record.
+// Create inserts a new media record of the operator's own.
 func (s *Store) Create(ctx context.Context, websiteID int64, filename, originalName, mimeType string, sizeBytes int64, contentHash string) (*Media, error) {
+	return s.CreateForPlugin(ctx, websiteID, "", filename, originalName, mimeType, sizeBytes, contentHash)
+}
+
+// CreateForPlugin inserts a new media record stored for a plugin — a form's
+// attachment — or for the operator when pluginID is "". The owner is set
+// here and never afterwards: it is what DeleteOwned checks a plugin's claim
+// against.
+func (s *Store) CreateForPlugin(ctx context.Context, websiteID int64, pluginID, filename, originalName, mimeType string, sizeBytes int64, contentHash string) (*Media, error) {
 	res, err := s.DB.Write.ExecContext(ctx,
-		`INSERT INTO media (website_id, filename, original_name, mime_type, size_bytes, content_hash)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		websiteID, filename, originalName, mimeType, sizeBytes, contentHash)
+		`INSERT INTO media (website_id, filename, original_name, mime_type, size_bytes, content_hash, owner_plugin)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		websiteID, filename, originalName, mimeType, sizeBytes, contentHash, pluginID)
 	if err != nil {
 		return nil, fmt.Errorf("create media: %w", err)
 	}
@@ -85,13 +93,25 @@ func (s *Store) UpdateMeta(ctx context.Context, id int64, altText, caption strin
 //
 // Uploading the same photo twice should say so rather than quietly filling the
 // card with a second copy.
+//
+// Only the operator's own files are compared: a visitor's attachment stored
+// for a plugin is that plugin's, and goes when its record is erased or
+// expires, so an upload must never turn out to be it.
 func (s *Store) FindByHash(ctx context.Context, websiteID int64, hash string) (*Media, error) {
+	return s.FindByHashFor(ctx, websiteID, "", hash)
+}
+
+// FindByHashFor is FindByHash among the files stored for one plugin, "" for
+// the operator's own. A file is never shared between owners: a plugin's
+// attachment that matched the logo would otherwise be the logo, and the
+// erasure of the attachment's record would take the logo with it.
+func (s *Store) FindByHashFor(ctx context.Context, websiteID int64, pluginID, hash string) (*Media, error) {
 	if hash == "" {
 		return nil, nil
 	}
 	m, err := scan(s.DB.Read.QueryRowContext(ctx,
-		`SELECT `+projection("media")+` FROM media WHERE website_id = $1 AND content_hash = $2 LIMIT 1`,
-		websiteID, hash))
+		`SELECT `+projection("media")+` FROM media WHERE website_id = $1 AND content_hash = $2 AND owner_plugin = $3 LIMIT 1`,
+		websiteID, hash, pluginID))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

@@ -559,6 +559,8 @@ var adminOnlyRoutes = []route{
 	{pattern: "POST /admin/users/{id}/delete"},
 	{pattern: "POST /admin/users/{id}/link"},
 	{pattern: "POST /admin/users/{id}/sessions/revoke"},
+	// Phase 33.2, D-09: the account period applies to every website's staff.
+	{pattern: "POST /admin/aufbewahrung/konten"},
 	{pattern: "GET /admin/mail"},
 	{pattern: "POST /admin/mail/test"},
 	{pattern: "POST /admin/mail/retry"},
@@ -680,6 +682,32 @@ var editorOpenRoutes = []route{
 	// publishes nothing (phase 33.1 D-14).
 	{pattern: "GET /admin/websites/{id}/widersprueche"},
 	{pattern: "POST /admin/websites/{id}/widersprueche/{requestID}/erledigt"},
+	// The Privacy screen follows them: finding a person's data and
+	// downloading it reads what the order book and the opt-out list show
+	// already, and changes nothing (Phase 33.2, DSR-01).
+	{pattern: "GET /admin/websites/{id}/datenschutz"},
+	{pattern: "GET /admin/websites/{id}/datenschutz/export.json"},
+	// The printable answer is the same download as a page.
+	{pattern: "GET /admin/websites/{id}/datenschutz/auskunft"},
+	// The requests people sent about their data, like the opt-out list:
+	// reading them publishes nothing (Phase 33.2, D-01).
+	{pattern: "GET /admin/websites/{id}/datenschutz/anfragen"},
+	// Recording an answer or a request that came by letter publishes
+	// nothing either, like marking an opt-out handled.
+	{pattern: "POST /admin/websites/{id}/datenschutz/anfragen/neu"},
+	{pattern: "POST /admin/websites/{id}/datenschutz/anfragen/{requestID}/antwort"},
+	// The retention periods are read by everybody with access to the
+	// website; changing one is decided by the handler (handlerDecidesRoutes).
+	{pattern: "GET /admin/websites/{id}/datenschutz/aufbewahrung"},
+	// The record of processing activities describes the website's settings
+	// and holds no person's data: read by everybody with access to the
+	// website (Phase 33.2, DSR-05).
+	{pattern: "GET /admin/websites/{id}/datenschutz/verzeichnis"},
+	{pattern: "GET /admin/websites/{id}/datenschutz/verzeichnis.json"},
+	{pattern: "GET /admin/websites/{id}/datenschutz/verzeichnis/drucken"},
+	// The result of an erasure: it shows what the person who erased left in
+	// their own session, once, and changes nothing (Phase 33.2, DSR-03).
+	{pattern: "GET /admin/websites/{id}/datenschutz/geloescht"},
 	{pattern: "GET /admin/websites/{id}/menus"},
 	{pattern: "POST /admin/websites/{id}/menus"},
 	{pattern: "GET /admin/websites/{id}/menus/{menuID}"},
@@ -733,6 +761,25 @@ var handlerDecidesRoutes = []struct {
 			"rule about two identities and not about a role, so requireAdmin cannot express it"},
 	{"POST /admin/users/{id}/password",
 		"the same handler and the same check, on the arm that writes"},
+	{"POST /admin/websites/{id}/datenschutz/aufbewahrung",
+		"a shortened period deletes data at the next run, so changing one is a publisher's " +
+			"decision: HandlePrivacyRetention asks refuseReadOnly before it writes, and " +
+			"requireFresh stands in front of it in the router. An editor reaches the handler " +
+			"and is refused with the read-only sentence, never with a 403"},
+	{"GET /admin/websites/{id}/datenschutz/loeschen",
+		"the erasure preview: requireFresh stands in front of it in the router, and anybody with " +
+			"access to the website may read what an erasure would do; HandlePrivacyErase shows the " +
+			"button only to somebody with the publishing right and the account box only to an administrator"},
+	{"POST /admin/websites/{id}/datenschutz/loeschen",
+		"erasing a person's data cannot be undone: requireFresh stands in front of it in the router, " +
+			"HandlePrivacyErase asks refuseReadOnly before anything is erased, so an editor without the " +
+			"publishing right is refused with the read-only sentence, and it ignores the account box for " +
+			"anybody who is not an administrator (Phase 33.2, D-09)"},
+	{"POST /admin/websites/{id}/datenschutz/berichtigen",
+		"correcting a person's record changes stored data: HandlePrivacyCorrect asks refuseReadOnly " +
+			"before anything is changed, so an editor without the publishing right is refused with the " +
+			"read-only sentence and never with a 403, and the Privacy screen shows the forms only to " +
+			"somebody who may publish (Phase 33.2, DSR-02)"},
 }
 
 // adminRoutesInSource reads the patterns straight out of newRouter.
@@ -1337,6 +1384,34 @@ func TestSensitiveRoutesAskForThePasswordAgain(t *testing.T) {
 		}
 	}
 
+	// A retention period, changed by an administrator whose second factor
+	// stands, so the request reaches the website's routes: the password is
+	// asked again before anything is stored (Phase 33.2, D-04).
+	if _, err := database.Write.Exec(`UPDATE users SET totp_secret = 'JBSWY3DPEHPK3PXP',
+		totp_confirmed_at = CURRENT_TIMESTAMP WHERE email = 'admin-fresh@test'`); err != nil {
+		t.Fatalf("confirm the second factor: %v", err)
+	}
+	if _, err := database.Write.Exec(`INSERT INTO websites (id, name, description) VALUES (1, 'Hofladen', '')`); err != nil {
+		t.Fatal(err)
+	}
+	rec := do(handler, "POST", "/admin/websites/1/datenschutz/aufbewahrung", admin)
+	if loc := rec.Header().Get("Location"); rec.Code != http.StatusSeeOther || !strings.HasPrefix(loc, auth.ConfirmPath) {
+		t.Errorf("POST the retention periods: got %d to %q, want a redirect to %s", rec.Code, loc, auth.ConfirmPath)
+	}
+	var stored int
+	if err := database.Read.QueryRow(`SELECT COUNT(*) FROM retention_periods`).Scan(&stored); err != nil || stored != 0 {
+		t.Errorf("%d periods stored without the password (%v)", stored, err)
+	}
+	// The account period: a shorter one deletes staff accounts at the next
+	// run (Phase 33.2, D-09).
+	rec = do(handler, "POST", "/admin/aufbewahrung/konten", admin)
+	if loc := rec.Header().Get("Location"); rec.Code != http.StatusSeeOther || !strings.HasPrefix(loc, auth.ConfirmPath) {
+		t.Errorf("POST the account period: got %d to %q, want a redirect to %s", rec.Code, loc, auth.ConfirmPath)
+	}
+	if err := database.Read.QueryRow(`SELECT COUNT(*) FROM app_settings WHERE key = 'retention.account_months'`).Scan(&stored); err != nil || stored != 0 {
+		t.Errorf("the account period was stored without the password (%v)", err)
+	}
+
 	src, err := os.ReadFile("main.go")
 	if err != nil {
 		t.Fatal(err)
@@ -1352,6 +1427,15 @@ func TestSensitiveRoutesAskForThePasswordAgain(t *testing.T) {
 		// takeovers from an unattended laptop.
 		"POST /admin/users/new", "POST /admin/users/{id}/link",
 		"POST /admin/users/{id}/sessions/revoke",
+		// Phase 33.2, D-04: a shortened retention period deletes personal
+		// data at the next run of the job, without a further question.
+		"POST /admin/websites/{id}/datenschutz/aufbewahrung",
+		// Phase 33.2, D-09: a shorter account period deletes staff accounts.
+		"POST /admin/aufbewahrung/konten",
+		// Phase 33.2, DSR-03, D-09: erasing a person's data cannot be undone;
+		// the preview stands behind the same question.
+		"GET /admin/websites/{id}/datenschutz/loeschen",
+		"POST /admin/websites/{id}/datenschutz/loeschen",
 	} {
 		found := false
 		for _, l := range lines {

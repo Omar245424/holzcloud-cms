@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/holzcloud/holzcloud-cms/internal/domain"
+	"github.com/holzcloud/holzcloud-cms/internal/dsr"
 	"github.com/holzcloud/holzcloud-cms/internal/money"
 	"github.com/holzcloud/holzcloud-cms/internal/outbox"
 	"github.com/holzcloud/holzcloud-cms/internal/shop"
@@ -105,7 +106,10 @@ func readCheckout(r *http.Request) checkoutValues {
 func (v checkoutValues) validate(audience shop.Audience, online bool) map[string]string {
 	errs := map[string]string{}
 
-	if !strings.Contains(v.Email, "@") || len(v.Email) < 5 {
+	// One bare address, as the privacy search finds and erases it and as a
+	// mail header takes it: the checkout is where the order's address comes
+	// in, so it is the place to keep it clean.
+	if !dsr.ValidEmail(v.Email) {
 		errs["email"] = "Bitte eine E-Mail-Adresse angeben, an die wir die Bestätigung schicken können."
 	}
 	if v.Name == "" {

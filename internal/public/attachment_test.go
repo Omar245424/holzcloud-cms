@@ -70,7 +70,7 @@ func TestNothingIsWrittenUntilThePluginKeepsIt(t *testing.T) {
 	req := httptest.NewRequest("POST", "/formular", strings.NewReader(body))
 	req.Header.Set("Content-Type", ctype)
 
-	fields, keeper, took := h.takeAttachments(req, ws.ID, true)
+	fields, keeper, took := h.takeAttachments(req, ws.ID, "kontaktformular", true)
 	if !took {
 		t.Fatal("the multipart submission was not taken")
 	}
@@ -138,7 +138,7 @@ func TestARefusedFileIsNamedAndNotHeld(t *testing.T) {
 	req := httptest.NewRequest("POST", "/formular", strings.NewReader(body))
 	req.Header.Set("Content-Type", ctype)
 
-	_, keeper, took := h.takeAttachments(req, ws.ID, true)
+	_, keeper, took := h.takeAttachments(req, ws.ID, "kontaktformular", true)
 	if !took {
 		t.Fatal("not taken")
 	}
@@ -164,7 +164,7 @@ func TestWithoutThePermissionTheBodyIsUnchanged(t *testing.T) {
 	req := httptest.NewRequest("POST", "/formular", strings.NewReader(body))
 	req.Header.Set("Content-Type", ctype)
 
-	if _, _, took := h.takeAttachments(req, ws.ID, false); took {
+	if _, _, took := h.takeAttachments(req, ws.ID, "kontaktformular", false); took {
 		t.Error("a plugin without the permission was given the files")
 	}
 }
@@ -187,7 +187,7 @@ func TestTooManyFilesAreNamed(t *testing.T) {
 	req := httptest.NewRequest("POST", "/formular", strings.NewReader(body))
 	req.Header.Set("Content-Type", ctype)
 
-	_, keeper, _ := h.takeAttachments(req, ws.ID, true)
+	_, keeper, _ := h.takeAttachments(req, ws.ID, "kontaktformular", true)
 	listed := keeper.List()
 	if len(listed) != len(files) {
 		t.Fatalf("%d listed, want all %d named", len(listed), len(files))
@@ -209,3 +209,55 @@ func TestTooManyFilesAreNamed(t *testing.T) {
 
 // The keeper answers the ABI's own type, so a change to one is a change to both.
 var _ plugin.FileKeeper = (*attachmentKeeper)(nil)
+
+// A kept attachment is the plugin's file and never the operator's: the same
+// bytes as an image of the operator's are stored again, for the plugin, so
+// that erasing the visitor's message cannot take the operator's image with
+// it.
+func TestAKeptAttachmentIsThePluginsOwn(t *testing.T) {
+	h, database := newTestHandler(t)
+	ws := seedWebsite(t, database, "Hofladen")
+	h.dataDir = t.TempDir()
+	h.SetUploadLimits(5<<20, 50<<20)
+	ctx := context.Background()
+	keep := func(pluginID string) plugin.KeptFile {
+		t.Helper()
+		body, ctype := multipartBody(t, map[string]string{"name": "Anna"}, map[string][]byte{"bild.png": onePixel(t)})
+		req := httptest.NewRequest("POST", "/formular", strings.NewReader(body))
+		req.Header.Set("Content-Type", ctype)
+		_, keeper, took := h.takeAttachments(req, ws.ID, pluginID, true)
+		if !took {
+			t.Fatal("not taken")
+		}
+		kept, err := keeper.Keep(ctx)
+		if err != nil || len(kept) != 1 {
+			t.Fatalf("kept = %+v, %v", kept, err)
+		}
+		return kept[0]
+	}
+	owner := func(id int64) string {
+		t.Helper()
+		var s string
+		if err := database.Read.QueryRow(`SELECT owner_plugin FROM media WHERE id = $1`, id).Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+
+	// The operator's own image: the media library keeps it for nobody.
+	logo := keep("")
+	attachment := keep("kontaktformular")
+	if attachment.MediaID == logo.MediaID || attachment.Existed {
+		t.Fatalf("the attachment is the operator's image %d: %+v", logo.MediaID, attachment)
+	}
+	if got := owner(attachment.MediaID); got != "kontaktformular" {
+		t.Errorf("the attachment belongs to %q, want kontaktformular", got)
+	}
+	if got := owner(logo.MediaID); got != "" {
+		t.Errorf("the operator's image belongs to %q, want nobody", got)
+	}
+	// The same bytes again for the same plugin are its file again.
+	if again := keep("kontaktformular"); again.MediaID != attachment.MediaID || !again.Existed {
+		t.Errorf("the same attachment twice: %+v, want %d again", again, attachment.MediaID)
+	}
+}

@@ -156,10 +156,52 @@ every call.
 | `notfound` | only once the core has found nothing, before the 404 page | `OnNotFound` |
 | `admin` | for its own screen in the admin | `OnAdmin` |
 | `event` | after something has happened; changes nothing any more | `OnEvent` |
+| `privacy` | when the operator searches, erases or corrects a person's data, and when the retention job runs | `OnPrivacy` |
 
 Use `notfound` rather than `request` whenever you can: `request` runs on every
 page view, `notfound` only on a miss. A redirect table belongs on the second hook,
 not the first.
+
+### The privacy hook
+
+A plugin that stores what a visitor typed — a message, an order, a sign-up —
+keeps personal data, and only the plugin knows the shape it stored it in. So the
+host asks, through `privacy`, with one of four operations in `PrivacyIn.Op`:
+
+| Operation | The host gives | The plugin answers |
+|---|---|---|
+| `find` | `Email` | `Records`: every record that carries the address, in any letter case, with its fields, the fields `correct` accepts and the media ids of its files; an erased record says `Erased` and the `RetainUntil` it was given |
+| `erase` | `Keys` (from its own `find`), `RetainUntil` | `Deleted` and `MediaIDs`; a record the law says to keep is reduced instead and listed in `Kept` with its fields and `Until` |
+| `correct` | `Key`, `Field`, `Value` | the record as it now stands |
+| `expire` | `Kind`, `Before`, `Limit` | `Deleted`, `MediaIDs`, and `More` when it stopped at the limit |
+
+`find` is read-only: the host refuses every write during it and reports a plugin
+that tried one as not searched. A record's `Kind` is `form_submission` or
+`order`, the two kinds the retention job asks plugins to expire; a `find` that
+answers with any other kind is reported as not searched too, because such a
+record would never expire. `erase` refuses a key that is not one of the
+plugin's own records before it deletes anything. Media ids are a claim: the
+host deletes only a file that `KeepFiles` stored for this plugin on this
+website, and refuses and reports any other — another website's, the operator's
+own, another plugin's. Each call has the same two
+seconds as every hook, which is why `expire` works in batches.
+
+Unlike the other hooks, an error your handler returns reaches the host: the SDK
+puts it into the answer, and the host reports the plugin as not searched rather
+than as having found nothing. Return what you already did together with the
+error: an `erase` or `expire` that deleted records and then failed hands back
+their `Deleted` and `MediaIDs`, and the host still counts them and deletes
+their files — once a record is gone, nothing else would find its attachments
+again. The `Records` of a failed call are dropped. A plugin that declares
+`privacy` and registers no handler answers nothing, and that is reported the
+same way.
+
+A plugin that keeps data for a website and does not declare `privacy` is named on
+the Privacy screen as not searched, with how many entries it holds — the
+operator then has to look through it by hand. Both shipped plugins that keep
+visitors' data answer it: `kontaktformular` deletes a message with its
+attachments, and `bestellung` reduces an order to its invoice basis — name,
+address, items, sum and the customer's note — until the date it was given.
 
 ### Permissions
 

@@ -108,7 +108,7 @@ func Tools(d Deps) []Tool {
 	}
 	for _, area := range [][]Tool{
 		pagesTools(d), mediaTools(d), structureTools(d),
-		siteTools(d), shopTools(d), adminTools(d),
+		siteTools(d), shopTools(d), privacyTools(d), adminTools(d),
 	} {
 		tools = append(tools, area...)
 	}

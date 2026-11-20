@@ -221,6 +221,108 @@ const (
 	EventFormReceived = "form.received"
 )
 
+// The privacy hook's operations (see OnPrivacy).
+const (
+	// PrivacyFind asks which records belong to an address. Answer with
+	// Records; the host refuses every write during it.
+	PrivacyFind = "find"
+	// PrivacyErase asks to remove the records under Keys, or to reduce one
+	// the law says to keep (store RetainUntil with it and answer Kept).
+	PrivacyErase = "erase"
+	// PrivacyCorrect asks to set Field of the record Key to Value.
+	PrivacyCorrect = "correct"
+	// PrivacyExpire asks to delete the records of Kind that came in before
+	// Before, at most Limit, answering More when there are more.
+	PrivacyExpire = "expire"
+)
+
+// The kinds a privacy record belongs to — the retention kinds the operator
+// sets a period for.
+const (
+	PrivacyKindFormSubmission = "form_submission"
+	PrivacyKindOrder          = "order"
+)
+
+// PrivacyIn is the host's privacy question. Times are RFC 3339 in UTC.
+type PrivacyIn struct {
+	Op string `json:"op"`
+	// Email is find's address, trimmed. Compare it in any letter case.
+	// correct may receive it as the address being replaced.
+	Email string `json:"email,omitempty"`
+	// Keys are erase's records: keys your own find returned. Refuse the
+	// whole call if one is not among your records, before deleting anything.
+	Keys []string `json:"keys,omitempty"`
+	// Key, Field and Value are correct's.
+	Key   string `json:"key,omitempty"`
+	Field string `json:"field,omitempty"`
+	Value string `json:"value,omitempty"`
+	// Kind and Before are expire's.
+	Kind   string `json:"kind,omitempty"`
+	Before string `json:"before,omitempty"`
+	// RetainUntil is the date until which a record erase reduces has to be
+	// kept. Store it with the record.
+	RetainUntil string `json:"retain_until,omitempty"`
+	// Limit bounds expire. A call has two seconds, like every hook.
+	Limit int `json:"limit,omitempty"`
+}
+
+// PrivacyField is one value of a record.
+type PrivacyField struct {
+	// Name is the stable key the export uses ("name", "email").
+	Name string `json:"name"`
+	// Label is what the operator reads: pass it through T.
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
+// PrivacyRecord is one record that belongs to the person.
+type PrivacyRecord struct {
+	// Key is your storage key.
+	Key string `json:"key"`
+	// Kind is one of the PrivacyKind constants.
+	Kind  string `json:"kind"`
+	Label string `json:"label"`
+	// Time is when the record came in.
+	Time   string         `json:"time"`
+	Fields []PrivacyField `json:"fields,omitempty"`
+	// Correctable names the fields your correct accepts.
+	Correctable []string `json:"correctable,omitempty"`
+	// MediaIDs are the record's files, such as the attachments KeepFiles
+	// returned. The host deletes only a file KeepFiles stored for your plugin
+	// on this website; any other id is refused and reported.
+	MediaIDs []int64 `json:"media_ids,omitempty"`
+	// Erased marks a record already reduced to what has to be kept.
+	Erased bool `json:"erased,omitempty"`
+	// RetainUntil is, for an erased record, the date you stored at its
+	// erasure (RFC 3339): the host tells the person it is kept until then.
+	RetainUntil string `json:"retain_until,omitempty"`
+}
+
+// PrivacyKept is a record erase reduced instead of deleting.
+type PrivacyKept struct {
+	Key string `json:"key"`
+	// Fields are the stable names of what stayed.
+	Fields []string `json:"fields"`
+	// Until is the date stored with the record.
+	Until string `json:"until"`
+}
+
+// PrivacyOut is the answer. Each operation fills its own part.
+type PrivacyOut struct {
+	Records  []PrivacyRecord `json:"records,omitempty"`
+	Deleted  int             `json:"deleted,omitempty"`
+	Kept     []PrivacyKept   `json:"kept,omitempty"`
+	MediaIDs []int64         `json:"media_ids,omitempty"`
+	More     bool            `json:"more,omitempty"`
+	// Error is filled in by the SDK from the error your handler returns, so
+	// that the host can tell a refusal from "nothing found". Return an error
+	// rather than setting it. Return what you already did with it — Deleted,
+	// Kept and MediaIDs of the records erase or expire handled before the
+	// failure — and the host still processes those; Records of a failed
+	// call are dropped.
+	Error string `json:"error,omitempty"`
+}
+
 // Page is a published page as a plugin sees it.
 //
 // Published only, always. There is no way to ask for a draft: an unfinished
@@ -333,6 +435,7 @@ var (
 	onNotFound func(RequestIn) (RequestOut, error)
 	onAdmin    func(AdminIn) (AdminOut, error)
 	onEvent    func(EventIn) error
+	onPrivacy  func(PrivacyIn) (PrivacyOut, error)
 )
 
 // OnContent filters a page's HTML before it is sent.
@@ -357,6 +460,13 @@ func OnAdmin(f func(AdminIn) (AdminOut, error)) { onAdmin = f }
 // OnEvent is told that something happened.
 func OnEvent(f func(EventIn) error) { onEvent = f }
 
+// OnPrivacy answers the operator's questions about one person's data: find,
+// erase, correct and expire (PrivacyIn.Op). A plugin that stores what a
+// visitor typed — a message, an order — should answer it; one that keeps data
+// and does not is named on the Privacy screen as not searched. Declare
+// "privacy" in plugin.json's hooks as well.
+func OnPrivacy(f func(PrivacyIn) (PrivacyOut, error)) { onPrivacy = f }
+
 // dispatch routes one call from the host to the registered handler.
 //
 // A hook nobody registered returns nothing rather than an error: the manifest
@@ -375,6 +485,8 @@ func dispatch(hook string, payload []byte) ([]byte, error) {
 		return call(payload, onNotFound)
 	case "admin":
 		return call(payload, onAdmin)
+	case "privacy":
+		return privacyCall(payload)
 	case "event":
 		if onEvent == nil {
 			return nil, nil
@@ -398,12 +510,38 @@ var warned bool
 
 func warnIfEmpty() {
 	if warned || onContent != nil || onRequest != nil || onRoute != nil ||
-		onNotFound != nil || onAdmin != nil || onEvent != nil {
+		onNotFound != nil || onAdmin != nil || onEvent != nil || onPrivacy != nil {
 		return
 	}
 	warned = true
 	Log("error", "no hook registered — registration belongs in func init(), "+
 		"not in func main(): a reactor module never runs main")
+}
+
+// privacyCall is call for the privacy hook, with one difference: an error
+// travels back inside the answer instead of becoming a log line and an empty
+// answer. For every other hook an empty answer means "nothing to do"; for
+// this one it would mean "nothing found", and a privacy answer that silently
+// lost a plugin's records looks complete.
+func privacyCall(payload []byte) ([]byte, error) {
+	if onPrivacy == nil {
+		return nil, nil
+	}
+	var in PrivacyIn
+	if err := json.Unmarshal(payload, &in); err != nil {
+		return json.Marshal(PrivacyOut{Error: err.Error()})
+	}
+	out, err := onPrivacy(in)
+	if err != nil {
+		// What the handler did before it failed goes back with the error:
+		// records deleted are gone, and the host still has to delete their
+		// files and count them. Records found do not: half an answer to
+		// "what do you hold" would read as the whole of it.
+		out.Records = nil
+		out.Error = err.Error()
+		return json.Marshal(out)
+	}
+	return json.Marshal(out)
 }
 
 // call unmarshals, runs a handler and marshals the answer.

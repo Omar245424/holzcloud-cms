@@ -2554,6 +2554,41 @@
         align-items: center;
         flex-wrap: wrap;
     }
+
+    /* Berichtigen auf dem Datenschutz-Bildschirm: aufgeklappt eine Zeile je
+       Feld, Beschriftung, Eingabe und Knopf nebeneinander, solange Platz ist. */
+    .privacy-correct {
+        margin-block-start: var(--space-2);
+        container-type: inline-size;
+    }
+
+    .privacy-correct > summary {
+        cursor: pointer;
+        font-weight: 500;
+    }
+
+    .privacy-correct__form {
+        display: grid;
+        grid-template-columns: minmax(8rem, 12rem) minmax(0, 1fr) auto;
+        gap: var(--space-1) var(--space-2);
+        align-items: center;
+        margin-block-start: var(--space-2);
+    }
+
+    .privacy-correct__form .form-label {
+        margin: 0;
+    }
+
+    .privacy-correct__hint,
+    .privacy-correct__note {
+        margin: var(--space-2) 0 0;
+    }
+
+    @container (max-width: 36rem) {
+        .privacy-correct__form {
+            grid-template-columns: minmax(0, 1fr);
+        }
+    }
 }
 
 /* ── Mediathek ── */

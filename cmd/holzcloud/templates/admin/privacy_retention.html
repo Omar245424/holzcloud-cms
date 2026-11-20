@@ -1,0 +1,135 @@
+{{/*
+  Die Aufbewahrungsfristen einer Website (Phase 33.2, D-04, D-05, D-09): wie
+  lange Formulareingänge, Datenschutzanfragen und Bestellungen bleiben, und
+  was der Aufbewahrungs-Job beim letzten Lauf gelöscht hat. Das Serverprotokoll
+  steht mit seiner Frist da und lässt sich hier nicht ändern: journald hält es
+  für den ganzen Server.
+
+  Eine kürzere Frist löscht beim nächsten Lauf, ohne weitere Frage. Darum fragt
+  der Server vor dem Speichern das Passwort noch einmal ab (requireFresh), und
+  es gibt keine htmx-Bestätigung (der Zähler in nojs_test.go bleibt bei 22).
+  Das Formular ist ein gewöhnlicher POST: eine abgelehnte Frist kommt als Seite
+  mit dem Fehler zurück, und htmx zeigt eine 422 nicht an.
+*/}}
+{{define "content"}}
+{{template "privacy_tabs" .}}
+{{template "privacy_retention-content" .}}
+{{end}}
+
+{{define "privacy_retention-content"}}
+{{template "retention_warning" .RetentionWarning}}
+<div class="card" id="retention-run" style="margin-bottom: var(--space-3);">
+    <h2>{{t "Last run"}}</h2>
+    {{with .Run}}
+    <p>
+        <strong>{{t .StatusName}}</strong>
+        <span class="text-muted">· {{.Started.Format "02.01.2006 15:04 MST"}}</span>
+        <span>· {{tf "%d deleted" .Deleted}}</span>
+    </p>
+    {{else}}
+    <p class="text-muted">{{t "No run yet."}}</p>
+    {{end}}
+</div>
+
+<div class="card">
+    <form method="POST" action="/admin/websites/{{.WebsiteID}}/datenschutz/aufbewahrung">
+        <input type="hidden" name="gorilla.csrf.Token" value="{{.CSRFToken}}">
+        {{if .ReadOnly}}<p class="text-muted">{{t .ReadOnlyNotice}}</p>{{end}}
+        <fieldset class="read-only-fields"{{if .ReadOnly}} disabled{{end}}>
+            <legend class="sr-only">{{t "Retention"}}</legend>
+            {{range .Periods}}
+            <div class="form-group" id="retention-{{.Kind}}">
+                <label class="form-label" for="period-{{.Kind}}">{{t .Label}}{{if .IsDefault}} <span class="badge badge--draft">{{t "Default"}}</span>{{end}}</label>
+                <div style="display:flex; align-items:center; gap: var(--space-1);">
+                    <input type="number" id="period-{{.Kind}}" name="{{.Kind}}" class="form-input" style="max-width: 8rem;"
+                           required inputmode="numeric" min="{{.Min}}" max="{{.Max}}" step="{{.Step}}" value="{{.Value}}"
+                           {{if .Error}}aria-invalid="true" aria-describedby="period-{{.Kind}}-error"{{end}}>
+                    <span>{{t .Unit}}</span>
+                </div>
+                <p class="form-hint">{{t "Default"}}: {{.Default}} {{t .Unit}}</p>
+                {{if .MinimumNote}}<p class="form-hint">{{tf .MinimumNote .Min}}</p>{{end}}
+                {{range .Notes}}<p class="form-hint">{{t .}}</p>{{end}}
+                {{if .HasLast}}
+                {{if .LastFailure}}
+                <p class="form-error"><strong>{{t "Failed in the last run"}}</strong> {{t .LastFailure}}</p>
+                {{else}}
+                <p class="form-hint">{{t "Last run"}}: {{tf "%d deleted" .LastDeleted}}</p>
+                {{end}}
+                {{end}}
+                {{if .Error}}<p class="form-error" id="period-{{.Kind}}-error">{{if .ErrorArg}}{{tf .Error .ErrorArg}}{{else}}{{t .Error}}{{end}}</p>{{end}}
+            </div>
+            {{end}}
+            <div class="form-group" id="retention-mail_failed">
+                <span class="form-label">{{t "Failed mail"}}</span>
+                <p class="form-hint">{{t "90 days after it was queued, in both mail queues; it cannot be changed here."}}</p>
+                {{with .MailFailed}}{{if .HasLast}}
+                {{if .LastFailure}}
+                <p class="form-error"><strong>{{t "Failed in the last run"}}</strong> {{t .LastFailure}}</p>
+                {{else}}
+                <p class="form-hint">{{t "Last run"}}: {{tf "%d deleted" .LastDeleted}}</p>
+                {{end}}
+                {{end}}{{end}}
+            </div>
+            <div class="form-group" id="retention-logs">
+                <span class="form-label">{{t "Server log"}}</span>
+                <p class="form-hint">{{tf "%d days, enforced by the system journal (deploy/journald-holzcloud.conf) for the whole server; it cannot be changed here." .LogDays}}</p>
+            </div>
+            <button type="submit" class="btn btn--primary" hx-disabled-elt="this">{{t "Save"}}</button>
+        </fieldset>
+    </form>
+</div>
+
+{{/* Die Frist für Konten ohne Anmeldung gilt für die ganze Installation (D-09):
+     sie steht auf jedem Aufbewahrungs-Bildschirm, ändern dürfen sie nur Admins,
+     mit dem Passwort davor (requireFresh). Admins werden nie automatisch
+     gelöscht; wie viele über der Frist sind, steht darunter. Ein gewöhnlicher
+     POST wie oben, aus demselben Grund. */}}
+<div class="card" id="retention-account" style="margin-top: var(--space-3);">
+    {{if .IsAdmin}}
+    <form method="POST" action="/admin/aufbewahrung/konten">
+        <input type="hidden" name="gorilla.csrf.Token" value="{{.CSRFToken}}">
+        <input type="hidden" name="website_id" value="{{.WebsiteID}}">
+        <div class="form-group">
+            <label class="form-label" for="period-account">{{t "Staff accounts without a sign-in"}} <span class="badge badge--draft">{{t "for the whole installation"}}</span></label>
+            <div style="display:flex; align-items:center; gap: var(--space-1);">
+                <input type="number" id="period-account" name="account" class="form-input" style="max-width: 8rem;"
+                       required inputmode="numeric" min="1" max="600" step="1" value="{{.Account.Value}}"
+                       {{if .Account.Error}}aria-invalid="true" aria-describedby="period-account-error"{{end}}>
+                <span>{{t "months"}}</span>
+            </div>
+            {{template "retention_inactive_admins" .Account}}
+            {{if .Account.Error}}<p class="form-error" id="period-account-error">{{t .Account.Error}}</p>{{end}}
+        </div>
+        <button type="submit" class="btn btn--primary" hx-disabled-elt="this">{{t "Save"}}</button>
+    </form>
+    {{else}}
+    <div class="form-group">
+        <span class="form-label">{{t "Staff accounts without a sign-in"}} <span class="badge badge--draft">{{t "for the whole installation"}}</span></span>
+        <p>{{.Account.Value}} {{t "months"}}</p>
+        {{template "retention_inactive_admins" .Account}}
+    </div>
+    {{end}}
+</div>
+
+{{/* Was der Job nicht erreicht: Plugins mit Daten dieser Website, die den
+     Datenschutz-Hook nicht beantworten. Sie stehen hier, damit die Fristen
+     oben nicht vollständiger aussehen, als sie sind. */}}
+{{if .NotCovered}}
+<div class="card" id="retention-not-covered" style="margin-top: var(--space-3);">
+    <h2>{{t "Not deleted by the retention job"}}</h2>
+    <p class="text-muted">{{t "These plugins keep data for this website and do not answer the privacy hook, so the retention job cannot delete what they keep."}}</p>
+    <ul>
+        {{range .NotCovered}}
+        <li><strong>{{.Name}}</strong> · {{if eq .Entries 1}}{{t "One entry"}}{{else}}{{tf "%d entries" .Entries}}{{end}}{{with .Reason}} · <span class="text-muted">{{t .}}</span>{{end}}</li>
+        {{end}}
+    </ul>
+</div>
+{{end}}
+{{end}}
+
+{{/* Wie viele Admins länger als die Frist nicht angemeldet waren. Der Job löscht
+     sie nie; der Satz sagt es, damit jemand von Hand entscheidet. */}}
+{{define "retention_inactive_admins"}}
+{{if eq .InactiveAdmins 1}}<p class="form-hint">{{t "One administrator account has not signed in for longer than this. Administrators are never deleted automatically."}}</p>
+{{else if .InactiveAdmins}}<p class="form-hint">{{tf "%d administrator accounts have not signed in for longer than this. Administrators are never deleted automatically." .InactiveAdmins}}</p>{{end}}
+{{end}}

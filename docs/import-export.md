@@ -28,6 +28,22 @@ themselves, the website's own **fields**, **content kinds** and **block kinds**,
 menus (nested, pointing at pages by slug, one per language), snippets, labels and
 every media file with its description and a SHA-256.
 
+**Privacy.** A bundle carries the website's privacy requests and opt-outs with
+the dates they arrived and were answered, and for a request about one's data
+also the rest of its record: the manner it arrived in (form, e-mail, letter,
+telephone, other), the outcome and the basis the operator gave — the record
+CCPA regulations § 7101 ask to be kept for 24 months, which must not be lost by
+moving the website ([security](security.md#requests-and-when-they-are-due);
+`TestRequestAnswersTravelWithTheWebsite`). An archive of such a website
+therefore holds names, addresses and notes, and is to be kept like the
+database. It carries the **retention periods** the website chose
+(`retention_periods`), not the defaults, so a period nobody chose keeps
+following the release it lands on. On import every period goes through the
+same check as the Retention screen: one below the law's floor for its kind — the
+seller's country for orders, 24 months for requests — is raised to it, and one
+this release cannot keep is skipped; the report names both
+(`importRetention`, `TestRetentionPeriodsTravelWithTheWebsite`).
+
 Anything that names a picture or a page names it the way the other machine can
 read: a **file name**, never an id — in the preview image, in a picture field,
 inside a block, and inside a block's own fields. An id means nothing on the

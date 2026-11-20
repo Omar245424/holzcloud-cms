@@ -217,6 +217,43 @@ func (m *Manager) Active(hook string, websiteID int64) bool {
 	return len(m.forHook(hook, websiteID)) > 0
 }
 
+// Serves reports whether one plugin is loaded, acts on the website and
+// declares the hook. A nil manager serves nothing.
+//
+// This is the question the privacy search asks before it calls a plugin
+// (Phase 33.2). It is asked per plugin rather than per hook, unlike Active,
+// because the answer the search needs is not "does anybody answer here" but
+// "does THIS plugin, which keeps data for the website, answer": a plugin that
+// holds a person's data and does not answer has to be named on the screen,
+// not silently skipped.
+func (m *Manager) Serves(id, hook string, websiteID int64) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if !m.snap.sites[id][websiteID] {
+		return false
+	}
+	for _, p := range m.snap.byHook[hook] {
+		if p == id {
+			return true
+		}
+	}
+	return false
+}
+
+// ActsOn reports whether a plugin is running and switched on for the
+// website, whatever hooks it declares. A nil manager acts on nothing.
+func (m *Manager) ActsOn(id string, websiteID int64) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.snap.sites[id][websiteID]
+}
+
 // Allows reports whether one plugin declared a permission.
 //
 // For the caller that has to prepare something BEFORE the plugin is called and
@@ -352,6 +389,86 @@ func (m *Manager) Emit(name string, websiteID int64, data map[string]string) {
 			_ = m.rt.Dispatch(ctx, id, HookEvent, websiteID, in, nil)
 		}
 	}()
+}
+
+// ErrNotServed is Privacy asked of a plugin that does not answer the privacy
+// hook on the website: not installed, switched off, not on the website, or
+// without the hook in its manifest.
+var ErrNotServed = errors.New("the plugin does not answer the privacy hook on this website")
+
+// ErrWroteDuringFind is a plugin that tried to change its store while it was
+// only asked to find. The write was refused; the answer is not trusted.
+var ErrWroteDuringFind = errors.New("the plugin tried to write while it was asked to find")
+
+// ErrPrivacyFailed is a plugin that answered the privacy hook with an error:
+// a refused key, a value that is not an address, a store it could not read.
+// The wrapped message is the plugin's own.
+var ErrPrivacyFailed = errors.New("the plugin could not answer")
+
+// ErrNoPrivacyAnswer is a plugin that declares the privacy hook and answered
+// nothing at all — most likely it registered no handler. Nothing is not "no
+// records": it is an answer nobody gave.
+var ErrNoPrivacyAnswer = errors.New("the plugin declares the privacy hook and answered nothing")
+
+// privacyOps are the operations Privacy passes on.
+var privacyOps = map[string]bool{
+	PrivacyFind: true, PrivacyErase: true, PrivacyCorrect: true, PrivacyExpire: true,
+}
+
+// Privacy asks one plugin one privacy question (Phase 33.2, D-09).
+//
+// Synchronous, unlike Emit, because the answer is the point: the operator is
+// waiting for a person's records, an erasure or a retention run. And every
+// error is returned rather than swallowed as the other hooks do, because a
+// privacy answer that silently lost a plugin would look complete — the
+// operator would hand a person an answer with their contact-form messages
+// missing and never know.
+//
+// find runs inside ReadOnly: a plugin that tries to write while it is only
+// asked to look is refused the write, and its answer is ErrWroteDuringFind
+// rather than records. Each call is bounded by CallTimeout like every hook;
+// expire answers in batches for that reason (PrivacyIn.Limit).
+//
+// A plugin's refusal is ErrPrivacyFailed and comes with the answer it gave:
+// the out of a failed erase or expire still says what was deleted before the
+// failure (Deleted, Kept, MediaIDs), and a caller processes that too. Every
+// other error comes with a nil answer.
+func (m *Manager) Privacy(ctx context.Context, websiteID int64, id string, in PrivacyIn) (*PrivacyOut, error) {
+	if !m.Serves(id, HookPrivacy, websiteID) {
+		return nil, fmt.Errorf("%w: %s", ErrNotServed, id)
+	}
+	if !privacyOps[in.Op] {
+		return nil, fmt.Errorf("unknown privacy operation %q", in.Op)
+	}
+	var tried func() bool
+	if in.Op == PrivacyFind {
+		ctx, tried = ReadOnly(ctx)
+	}
+	// Read raw first: an empty answer and "{}" are different things here.
+	var raw json.RawMessage
+	if err := m.rt.Dispatch(ctx, id, HookPrivacy, websiteID, in, &raw); err != nil {
+		return nil, err
+	}
+	if tried != nil && tried() {
+		return nil, fmt.Errorf("%w: %s", ErrWroteDuringFind, id)
+	}
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("%w: %s", ErrNoPrivacyAnswer, id)
+	}
+	var out PrivacyOut
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("the privacy answer of %s is not valid JSON: %w", id, err)
+	}
+	if out.Error != "" {
+		// The answer still says what the plugin did before it failed: an
+		// erase or expire that deleted records and then stopped hands back
+		// their count and their files, which nothing else would find again.
+		// What it found is dropped: half of a find is not an answer.
+		err := fmt.Errorf("%w: %s: %s", ErrPrivacyFailed, id, out.Error)
+		out.Records, out.Error = nil, ""
+		return &out, err
+	}
+	return &out, nil
 }
 
 // --- lifecycle --------------------------------------------------------------
