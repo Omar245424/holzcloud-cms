@@ -72,9 +72,9 @@ translated — but not twice in one.
 
 ## Legal pages in several languages
 
-The privacy page, the imprint and, on a website that follows US law, the Do Not
-Sell or Share page are composed from templates in German, French, Italian,
-Romansh and English ([security](security.md#legal-frameworks-the-privacy-page-and-the-imprint)).
+The privacy page, the imprint, the request page and, on a website that follows
+US law, the Do Not Sell or Share page are composed from templates in German,
+French, Italian, Romansh and English ([security](security.md#legal-frameworks-the-privacy-page-and-the-imprint)).
 A new website is German until its settings say otherwise, and it starts with
 the first two as German drafts, *Impressum* at `/impressum` and
 *Datenschutzerklärung* at `/datenschutz`. Each page takes the title and the
@@ -100,6 +100,16 @@ never changed; a cell that has one offers a new draft to compare instead.
 - The Do Not Sell or Share page keeps its statutory English title and the
   address `do-not-sell-or-share` in every language; the text below the title
   is in the page's language.
+- **The request page** — *Anfrage zu meinen Daten* at `/meine-daten`, *Request
+  about my data* at `/my-data`, *Demande concernant mes données* at
+  `/mes-donnees`, *Richiesta sui miei dati* at `/i-miei-dati`, *Dumonda davart
+  mias datas* at `/mias-datas` — is offered on every website, whatever law it
+  follows, because it carries the [request form](content-model.md#the-request-form).
+  Each language names the same deadlines and citations for the website's
+  frameworks; a test compares the numbers of every language's page with the
+  English one, so a deadline cannot differ between two pages of one website
+  (`TestEveryLanguageStatesTheSameDeadlines`). A Spanish page gets the English
+  text, and the Romansh one carries the machine notice as the others do.
 
 ## The language of the admin
 

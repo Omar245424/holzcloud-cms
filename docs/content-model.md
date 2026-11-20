@@ -13,6 +13,7 @@ build of the program.
 - [Snippets](#snippets)
 - [Values](#values)
 - [The opt-out widget](#the-opt-out-widget)
+- [The request form](#the-request-form)
 
 ## Fields
 
@@ -364,3 +365,50 @@ with and without the signal and does not name it (`optoutVary`).
 where the widget goes, saying what visitors see there, or that they see
 nothing on a website without US (`expandOptOutPreview`). The real widget needs
 the visitor's request, and its form posts to the public site.
+
+## The request form
+
+`[[datenanfrage]]` in the text of a page places the form through which a
+visitor asks about their own personal data, on **every website**, whatever law
+it follows — the right of access is in all four frameworks:
+
+- what they ask for: a copy of their data (access), a correction, or the
+  erasure;
+- the e-mail address the request is about, which is required;
+- a name and a note, which are not.
+
+There is no account and no cookie. What the form stores, how it is guarded and
+where the operator answers it is in
+[security](security.md#the-request-form) (`expandDataRequest`,
+`HandleDataRequest`).
+
+**The answer never shows data.** Whatever address was typed, the visitor reads
+the same sentence — the request is recorded, and the operator answers it after
+checking that it is theirs. Nothing about any person ever appears on the page,
+so the form cannot be used to learn whether somebody is a customer
+(`TestARequestIsStored`). The answer itself comes from the operator, by the
+way the request page describes.
+
+It is drawn when the page is delivered, because the form carries a time stamp
+signed for that answer, and the page is never answered with an old copy
+(`TestTheRequestPageIsNeverAnsweredWithAStaleStamp`). It speaks the page's
+language (English on a Spanish or Romansh page), uses no script, and is styled
+by the theme's contact-form classes (`.contact-form` and its parts, the choice
+field included), which every shipped theme has.
+
+**Where it works** is the opt-out widget's rule: on a line of its own, where
+the paragraph goes with it, or inside a sentence. A marker typed into a link
+address or another attribute is removed, not expanded. One form per page: a
+second marker shows nothing. A feed entry and what a plugin reads get no form
+and never the marker (`withoutDataRequest`,
+`TestTheRequestMarkerNeverLeavesThePage`).
+
+**The request page** ("Request about my data", `/meine-daten` in German,
+`/my-data` in English) that the Legal pages card creates carries the marker
+already, alone on its line, between the deadlines of the website's frameworks
+and how the answer comes ([multilingual](multilingual.md#legal-pages-in-several-languages)).
+Any other page may carry it too.
+
+**In the preview** the editor's pane and the themed preview show a dashed box
+where the form goes, in the operator's language, and neither the marker nor a
+form (`expandDataRequestPreview`).
