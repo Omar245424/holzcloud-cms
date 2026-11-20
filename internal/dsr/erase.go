@@ -526,6 +526,9 @@ func (s *Service) erasePlugin(ctx context.Context, websiteID int64, source strin
 			if !ok {
 				continue
 			}
+			if err := stripCorrections(ctx, s.db.Write, websiteID, source, rec.Key); err != nil {
+				rep.fail(websiteID, source, err)
+			}
 			it, _ := p.disposition(rec)
 			it.Action = ActionReduce
 			it.Kept = pluginKeptLabels(rec, k.Fields)
@@ -702,10 +705,42 @@ func (s *Service) reduceOrder(ctx context.Context, websiteID int64, number, emai
 		websiteID, id); err != nil {
 		return false, fmt.Errorf("order mails: %w", err)
 	}
+	if err := stripCorrections(ctx, tx, websiteID, EraseOrders, number); err != nil {
+		return false, err
+	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("order: %w", err)
 	}
 	return true, nil
+}
+
+// execer is a write connection or a transaction on it.
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// stripCorrections removes the old and the new value from the activity
+// entries of the corrections of one order, when the order is reduced at an
+// erasure.
+//
+// While the order is the person's, a corrected invoice field keeps both
+// values in the log beside each other: AO § 146(4) asks that the original
+// stays ascertainable (admin/privacy_correct.go). Once the person is erased
+// the order is reduced to its invoice record, which keeps what the invoice
+// says until its period ends; the log, which no period reaches, must not go
+// on keeping the person's former name and address for ever. The entry
+// stays, with the field and the order, as the record that a correction was
+// made. An entry whose metadata is not JSON is left alone.
+func stripCorrections(ctx context.Context, db execer, websiteID int64, source, key string) error {
+	if _, err := db.ExecContext(ctx, `UPDATE activity_log SET metadata = json_remove(metadata, '$.old', '$.new')
+		WHERE action = $1 AND website_id = $2
+		  AND CASE WHEN json_valid(metadata)
+		      THEN json_extract(metadata, '$.source') = $3 AND json_extract(metadata, '$.key') = $4
+		      ELSE 0 END`,
+		activity.ActionPrivacyCorrect, websiteID, source, key); err != nil {
+		return fmt.Errorf("%s: the corrections in the activity log: %w", source, err)
+	}
+	return nil
 }
 
 // fail records a source or record that could not be erased, and writes it

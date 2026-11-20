@@ -540,6 +540,76 @@ func TestAPluginThatFailsHalfwayLeavesNoOrphanFile(t *testing.T) {
 	}
 }
 
+// A corrected invoice field keeps its old and new value in the activity log
+// (AO § 146(4)) while the order is the person's. Once the person is erased
+// and the order reduced, those values go from the log too: the entry says a
+// field was corrected, no longer what it said.
+func TestErasureStripsTheCorrectedValuesOfTheOrder(t *testing.T) {
+	_, database := newTestStore(t)
+	ctx := context.Background()
+	a := website(t, database, "A")
+	b := website(t, database, "B")
+	s, _, seed, _ := erasetestPlugins(t, database, a)
+	erasetestOrder(t, database, a, "2026-0001", "ada@example.com")
+	erasetestOrder(t, database, a, "2026-0002", "bob@example.com")
+	const farm = "bestellung:20260301T090000-cccccccc"
+	seed("bestellung", a, farm, map[string]any{
+		"id": "20260301T090000-cccccccc", "eingegangen": "2026-03-01T09:00:00Z",
+		"name": "Ada Lovelace", "email": "ada@example.com", "adresse": "Bahnhofstrasse 1",
+		"posten":   []map[string]any{{"slug": "seife", "titel": "Schafmilchseife", "menge": 2, "preis": "8,50"}},
+		"waehrung": "CHF",
+	})
+	logged := func(websiteID int64, source, key string) int64 {
+		meta, _ := json.Marshal(map[string]any{"source": source, "key": key, "field": "street",
+			"invoice": true, "old": "Altweg 9", "new": "Bahnhofstrasse 1"})
+		res, err := database.Write.Exec(`INSERT INTO activity_log (actor_email, action, entity_type, entity_id, website_id, metadata)
+			VALUES ('chef@example.com', 'privacy.correct', 'website', $1, $1, $2)`, websiteID, string(meta))
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, _ := res.LastInsertId()
+		return id
+	}
+	ours := logged(a, "orders", "2026-0001")
+	farmEntry := logged(a, "plugin:bestellung", farm)
+	bobs := logged(a, "orders", "2026-0002")
+	elsewhere := logged(b, "orders", "2026-0001")
+	findExec(t, database, `INSERT INTO activity_log (actor_email, action, entity_type, entity_id, website_id, metadata)
+		VALUES ('chef@example.com', 'privacy.correct', 'website', $1, $1, 'not json')`, a)
+
+	if _, err := s.Erase(ctx, a, "CH", erasetestOrders(s, EraseOrders, ErasePlugins)); err != nil {
+		t.Fatalf("Erase: %v", err)
+	}
+	meta := func(id int64) map[string]any {
+		var raw string
+		if err := database.Read.QueryRow(`SELECT metadata FROM activity_log WHERE id = $1`, id).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(raw), &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	for name, id := range map[string]int64{"the erased order": ours, "the erased farm-shop order": farmEntry} {
+		m := meta(id)
+		if _, ok := m["old"]; ok {
+			t.Errorf("%s: the entry still carries the old value: %v", name, m)
+		}
+		if _, ok := m["new"]; ok {
+			t.Errorf("%s: the entry still carries the new value: %v", name, m)
+		}
+		if m["field"] != "street" || m["key"] == nil {
+			t.Errorf("%s: the entry lost what was corrected: %v", name, m)
+		}
+	}
+	for name, id := range map[string]int64{"another person's order": bobs, "another website's order": elsewhere} {
+		if m := meta(id); m["old"] != "Altweg 9" || m["new"] != "Bahnhofstrasse 1" {
+			t.Errorf("%s: the entry was changed: %v", name, m)
+		}
+	}
+}
+
 func TestAFileThatStaysIsNamed(t *testing.T) {
 	_, database := newTestStore(t)
 	a := website(t, database, "A")

@@ -549,7 +549,7 @@ the record is:
 | Record | Corrected | How |
 |---|---|---|
 | Order: e-mail, phone | freely | the invoice does not print them (`TestAnOrdersEmailIsCorrected`) |
-| Order: name, company, VAT number, street, postal code, city, country | yes, with the original kept | the old and the new value go into the activity log, because AO § 146(4) forbids changing a record "in a way that leaves its original content no longer ascertainable"; the notice says that an invoice already issued may need a corrected one (`TestAnInvoiceFieldIsCorrectedWithItsOriginalKept`, `TestAnInvoiceCorrectionKeepsTheOriginalInTheLog`) |
+| Order: name, company, VAT number, street, postal code, city, country | yes, with the original kept | the old and the new value go into the activity log, because AO § 146(4) forbids changing a record "in a way that leaves its original content no longer ascertainable"; the notice says that an invoice already issued may need a corrected one (`TestAnInvoiceFieldIsCorrectedWithItsOriginalKept`, `TestAnInvoiceCorrectionKeepsTheOriginalInTheLog`); when the person is erased and the order reduced, both values go from those entries, which keep the field and the order (`TestErasureStripsTheCorrectedValuesOfTheOrder`) |
 | An erased order | no | the erasure is one-way (`TestAnErasedOrderCannotBeCorrected`) |
 | Contact message from before the plugin | name, e-mail | what the person wrote stays what they wrote (`TestALegacyFormMessageIsCorrected`) |
 | A plugin's record | the fields the plugin lists | through its privacy hook; a farm-shop order's address counts as an invoice field (`TestAPluginRecordIsCorrectedThroughTheHook`) |

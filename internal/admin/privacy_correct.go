@@ -103,8 +103,10 @@ func (h *Handler) HandlePrivacyCorrect(w http.ResponseWriter, r *http.Request) e
 		// original content no longer ascertainable. An order is the seller's
 		// copy of an invoice, so an invoice field keeps its old value here,
 		// in the activity log, beside the new one. The log's manual purge
-		// stays the operator's to use. The e-mail address is never an
-		// invoice field, so no address reaches the log this way.
+		// stays the operator's to use, and an erasure of the person that
+		// reduces the order removes both values from these entries again
+		// (dsr's stripCorrections). The e-mail address is never an invoice
+		// field, so no address reaches the log this way.
 		meta["old"], meta["new"] = ch.Old, ch.New
 	}
 	websiteID := ws.ID
