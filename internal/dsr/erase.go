@@ -380,7 +380,7 @@ func (s *Service) Erase(ctx context.Context, websiteID int64, country string, op
 		case !opt.Sources[group]:
 			rep.Kept = append(rep.Kept, keptWhole(it, eraseNotChosen))
 		case group == EraseOrders:
-			done, err := s.reduceOrder(ctx, websiteID, rec.Key, opt.Email, now, it.Until)
+			done, err := s.reduceOrder(ctx, websiteID, rec.Key, p.res.Email, now, it.Until)
 			switch {
 			case err != nil:
 				rep.fail(websiteID, rec.Source, err)

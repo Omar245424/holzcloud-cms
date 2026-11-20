@@ -242,6 +242,27 @@ func TestErasingAnOrderReducesIt(t *testing.T) {
 	}
 }
 
+// The address the erasure is given is searched trimmed, and the order the
+// search found is re-read under that same trimmed address.
+func TestAnAddressWithSpacesAroundItIsErased(t *testing.T) {
+	_, database := newTestStore(t)
+	a := website(t, database, "A")
+	id := erasetestOrder(t, database, a, "2026-0001", "ada@example.com")
+	s := NewService(database)
+	opt := erasetestOrders(s, EraseOrders)
+	opt.Email = "  ada@example.com "
+	rep, err := s.Erase(context.Background(), a, "CH", opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Reduced) != 1 || len(rep.Failed) != 0 {
+		t.Errorf("reduced %+v, failed %+v; want the order reduced", rep.Reduced, rep.Failed)
+	}
+	if row := erasetestRow(t, database, "orders", id); row["erased_at"] == "NULL" || row["email"] != "" {
+		t.Errorf("the order was not reduced: %v", row)
+	}
+}
+
 func TestTwoErasedOrdersKeepUniqueTokens(t *testing.T) {
 	_, database := newTestStore(t)
 	a := website(t, database, "A")
