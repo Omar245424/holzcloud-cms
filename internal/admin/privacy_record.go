@@ -305,9 +305,14 @@ func (h *Handler) HandlePrivacyAnswerPrint(w http.ResponseWriter, r *http.Reques
 		if !rec.Erased {
 			continue
 		}
-		k := answerKept{Label: rec.Label, Key: rec.Key}
-		if rec.Kind == dsr.RetentionOrder && !rec.Time.IsZero() {
-			k.Until = legal.OrderDeletableFrom(rec.Time, ans.Input.OrderYears).In(loc).Format("02.01.2006")
+		// The date stored at the erasure is what the person was told, and it
+		// stays true when the period changes later; only an order erased
+		// without one is given today's period. 1 January in UTC, printed in
+		// UTC, so that no clock west of Greenwich makes it 31 December.
+		k := answerKept{Label: rec.Label, Key: rec.Key, Until: erasureDate(rec.RetainUntil)}
+		if k.Until == "" && rec.Kind == dsr.RetentionOrder && !rec.Time.IsZero() {
+			until := legal.OrderDeletableFrom(rec.Time, ans.Input.OrderYears)
+			k.Until = erasureDate(&until)
 		}
 		data.Kept = append(data.Kept, k)
 	}

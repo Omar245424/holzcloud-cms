@@ -293,6 +293,9 @@ type PrivacyRecord struct {
 	MediaIDs []int64 `json:"media_ids,omitempty"`
 	// Erased marks a record already reduced to what has to be kept.
 	Erased bool `json:"erased,omitempty"`
+	// RetainUntil is, for an erased record, the date you stored at its
+	// erasure (RFC 3339): the host tells the person it is kept until then.
+	RetainUntil string `json:"retain_until,omitempty"`
 }
 
 // PrivacyKept is a record erase reduced instead of deleting.

@@ -403,7 +403,7 @@ func (ordersSource) Name() string { return "orders" }
 // ordersQuery is the statement ordersSource runs. It never selects token.
 const ordersQuery = `SELECT id, number, currency, email, name, company, vat_number, phone,
 	street, postal_code, city, country, note, total_gross, status, payment_method,
-	payment_status, payment_reference, created_at, erased_at IS NOT NULL
+	payment_status, payment_reference, created_at, erased_at IS NOT NULL, retain_until
 	FROM orders WHERE website_id = $1 AND email = $2 COLLATE NOCASE`
 
 func (o ordersSource) Find(ctx context.Context, websiteID int64, email string) ([]Record, error) {
@@ -426,10 +426,11 @@ func (o ordersSource) Find(ctx context.Context, websiteID int64, email string) (
 			total                                             int64
 			status, method, payStatus, payRef, createdAt      string
 			erased                                            bool
+			retainUntil                                       sql.NullString
 		)
 		if err := rows.Scan(&id, &number, &currency, &addr, &name, &company, &vat, &phone,
 			&street, &postal, &city, &country, &note, &total, &status, &method,
-			&payStatus, &payRef, &createdAt, &erased); err != nil {
+			&payStatus, &payRef, &createdAt, &erased, &retainUntil); err != nil {
 			return nil, err
 		}
 		cur := money.CurrencyFor(currency)
@@ -460,6 +461,11 @@ func (o ordersSource) Find(ctx context.Context, websiteID int64, email string) (
 				field("payment_reference", payRef),
 				field("total", cur.Format(money.Amount(total))),
 			},
+		}
+		if retainUntil.Valid {
+			if until := parseTime(retainUntil.String); !until.IsZero() {
+				rec.RetainUntil = &until
+			}
 		}
 		list = append(list, found{id: id, currency: currency, rec: rec})
 	}

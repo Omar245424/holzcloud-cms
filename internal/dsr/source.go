@@ -74,6 +74,9 @@ type Record struct {
 	// Erased is true when the record has already been reduced to what the
 	// law asks to keep.
 	Erased bool
+	// RetainUntil is the date an erased record is kept until, as stored at
+	// its erasure — what the person was told — and nil when none is stored.
+	RetainUntil *time.Time
 }
 
 // Holder is a plugin that keeps data for the website in plugin_store.

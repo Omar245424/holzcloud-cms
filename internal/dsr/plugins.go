@@ -116,6 +116,10 @@ func (p pluginSource) Find(ctx context.Context, websiteID int64, email string) (
 		if t, err := time.Parse(time.RFC3339, r.Time); err == nil {
 			rec.Time = t
 		}
+		if t, err := time.Parse(time.RFC3339, r.RetainUntil); err == nil && r.Erased {
+			until := t.UTC()
+			rec.RetainUntil = &until
+		}
 		for _, f := range r.Fields {
 			rec.Fields = append(rec.Fields, Field{Name: f.Name, Label: f.Label, Value: f.Value})
 		}

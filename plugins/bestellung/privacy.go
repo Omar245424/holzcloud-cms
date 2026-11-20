@@ -92,6 +92,8 @@ func privacyRecord(key string, b order) plugin.PrivacyRecord {
 	}
 	if !rec.Erased {
 		rec.Correctable = []string{"name", "email", "phone", "address"}
+	} else {
+		rec.RetainUntil = b.RetainUntil
 	}
 	add := func(name, label, value string) {
 		if strings.TrimSpace(value) == "" {

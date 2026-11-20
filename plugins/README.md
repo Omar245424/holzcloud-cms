@@ -170,15 +170,17 @@ host asks, through `privacy`, with one of four operations in `PrivacyIn.Op`:
 
 | Operation | The host gives | The plugin answers |
 |---|---|---|
-| `find` | `Email` | `Records`: every record that carries the address, in any letter case, with its fields, the fields `correct` accepts and the media ids of its files |
+| `find` | `Email` | `Records`: every record that carries the address, in any letter case, with its fields, the fields `correct` accepts and the media ids of its files; an erased record says `Erased` and the `RetainUntil` it was given |
 | `erase` | `Keys` (from its own `find`), `RetainUntil` | `Deleted` and `MediaIDs`; a record the law says to keep is reduced instead and listed in `Kept` with its fields and `Until` |
 | `correct` | `Key`, `Field`, `Value` | the record as it now stands |
 | `expire` | `Kind`, `Before`, `Limit` | `Deleted`, `MediaIDs`, and `More` when it stopped at the limit |
 
 `find` is read-only: the host refuses every write during it and reports a plugin
 that tried one as not searched. `erase` refuses a key that is not one of the
-plugin's own records before it deletes anything. Media ids are a claim the host
-checks against the website before it deletes a file. Each call has the same two
+plugin's own records before it deletes anything. Media ids are a claim: the
+host deletes only a file that `KeepFiles` stored for this plugin on this
+website, and refuses and reports any other — another website's, the operator's
+own, another plugin's. Each call has the same two
 seconds as every hook, which is why `expire` works in batches.
 
 Unlike the other hooks, an error your handler returns reaches the host: the SDK

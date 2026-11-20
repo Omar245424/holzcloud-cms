@@ -450,6 +450,34 @@ func TestThePrintableAnswer(t *testing.T) {
 	}
 }
 
+// The printable answer tells the person until when an erased order is kept
+// by the date stored at the erasure — what they were told then — and prints
+// it as the day it is, on any clock.
+func TestTheAnswerPrintsTheStoredKeptUntilDate(t *testing.T) {
+	h, sm, database, ws := privacyAdmin(t)
+	privacyOrder(t, database, ws.ID, "2026-0921", "ada@example.com", "Ada Lovelace")
+	if _, err := database.Write.Exec(`UPDATE orders SET erased_at = '2026-11-01T00:00:00Z',
+		retain_until = '2039-01-01T00:00:00Z' WHERE number = '2026-0921'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Write.Exec(`UPDATE websites SET timezone = 'America/New_York' WHERE id = $1`, ws.ID); err != nil {
+		t.Fatal(err)
+	}
+	rec := privacyGet(t, h, sm, h.HandlePrivacyAnswerPrint, privacyScreen(ws.ID)+"/auskunft?email=ada@example.com", ws.ID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "01.01.2039") {
+		t.Errorf("the answer does not say the order is kept until 01.01.2039, the date stored at its erasure")
+	}
+	for _, wrong := range []string{"31.12.2038", "01.01.2037", "31.12.2036"} {
+		if strings.Contains(body, wrong) {
+			t.Errorf("the answer prints %s", wrong)
+		}
+	}
+}
+
 // A staff account is the installation's, and the list of accounts is an
 // administrator's screen: the Privacy search, the export and the printable
 // answer show the account to an administrator and to nobody else.

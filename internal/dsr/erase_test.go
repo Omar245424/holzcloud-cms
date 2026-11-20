@@ -464,6 +464,45 @@ func TestErasureOfPluginRecords(t *testing.T) {
 	}
 }
 
+// An erased record carries the date stored at its erasure, from the core's
+// order book and from a plugin's, so that what the person is told later is
+// what they were told then.
+func TestAnErasedRecordCarriesItsStoredDate(t *testing.T) {
+	_, database := newTestStore(t)
+	ctx := context.Background()
+	a := website(t, database, "A")
+	s, _, seed, _ := erasetestPlugins(t, database, a)
+	id := erasetestOrder(t, database, a, "2026-0001", "ada@example.com")
+	findExec(t, database, `UPDATE orders SET erased_at = '2026-11-01T00:00:00Z',
+		retain_until = '2039-01-01T00:00:00Z' WHERE id = $1`, id)
+	const farm = "bestellung:20260301T090000-cccccccc"
+	seed("bestellung", a, farm, map[string]any{
+		"id": "20260301T090000-cccccccc", "eingegangen": "2026-03-01T09:00:00Z",
+		"name": "Ada Lovelace", "email": "ada@example.com", "adresse": "Bahnhofstrasse 1",
+		"posten":    []map[string]any{{"slug": "seife", "titel": "Schafmilchseife", "menge": 2, "preis": "8,50"}},
+		"waehrung":  "CHF",
+		"geloescht": "2026-11-01T00:00:00Z", "aufbewahren_bis": "2041-01-01T00:00:00Z",
+	})
+	res, err := s.Find(ctx, a, "ada@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"orders": "2039-01-01", "plugin:bestellung": "2041-01-01"}
+	for _, rec := range res.Records {
+		w, ok := want[rec.Source]
+		if !ok {
+			continue
+		}
+		delete(want, rec.Source)
+		if !rec.Erased || rec.RetainUntil == nil || rec.RetainUntil.Format("2006-01-02") != w {
+			t.Errorf("%s: erased %v, kept until %v, want %s", rec.Source, rec.Erased, rec.RetainUntil, w)
+		}
+	}
+	if len(want) != 0 {
+		t.Errorf("not found: %v", want)
+	}
+}
+
 func TestAFileThatStaysIsNamed(t *testing.T) {
 	_, database := newTestStore(t)
 	a := website(t, database, "A")
