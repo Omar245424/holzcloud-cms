@@ -96,6 +96,10 @@ type correctField struct {
 	// unstamped marks a statement of a table without updated_at: it takes
 	// no $4.
 	unstamped bool
+	// gone is the error of a row the statement no longer finds: ErrErased
+	// when nil, for an order, which only an erasure takes out of reach;
+	// ErrNotFound for a record that is simply deleted.
+	gone error
 }
 
 // orderFields are the corrections of an order, in the order the screen shows
@@ -133,9 +137,9 @@ var formMessageFields = []string{"name", "email"}
 
 var formMessageCorrections = map[string]correctField{
 	"name": {stmt: `UPDATE form_messages SET name = $3
-		WHERE website_id = $1 AND id = $2`, max: 200, required: true, unstamped: true},
+		WHERE website_id = $1 AND id = $2`, max: 200, required: true, unstamped: true, gone: ErrNotFound},
 	"email": {stmt: `UPDATE form_messages SET email = $3
-		WHERE website_id = $1 AND id = $2`, max: 254, required: true, unstamped: true},
+		WHERE website_id = $1 AND id = $2`, max: 254, required: true, unstamped: true, gone: ErrNotFound},
 }
 
 // pluginRule is the host's own check of a plugin field before the plugin is
@@ -316,7 +320,8 @@ func isDigits(s string, n int) bool {
 
 // correctRow runs the fixed statement of one field of a core table. A row
 // that is not changed was erased or removed since the search: an order by an
-// erasure that ran in between, which is ErrErased.
+// erasure that ran in between, which is ErrErased, and any other record by
+// a deletion, which is the field's gone error (ErrNotFound).
 func (s *Service) correctRow(ctx context.Context, websiteID int64, key, field, value string, rule correctField) error {
 	if rule.stmt == "" {
 		return ErrNotCorrectable
@@ -337,6 +342,9 @@ func (s *Service) correctRow(ctx context.Context, websiteID int64, key, field, v
 		return err
 	}
 	if n == 0 {
+		if rule.gone != nil {
+			return rule.gone
+		}
 		return ErrErased
 	}
 	return nil

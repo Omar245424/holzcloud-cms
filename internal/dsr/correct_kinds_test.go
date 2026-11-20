@@ -82,6 +82,21 @@ func TestAnErasedOrderCannotBeCorrected(t *testing.T) {
 	}
 }
 
+// A row that went between the search and the correction is "not found" —
+// only an order is "erased", because only an erasure reduces one.
+func TestAVanishedRowIsNotFoundAndAVanishedOrderErased(t *testing.T) {
+	_, database := newTestStore(t)
+	ctx := context.Background()
+	a := website(t, database, "A")
+	s := NewService(database)
+	if err := s.correctRow(ctx, a, "999", "name", "Ada", formMessageCorrections["name"]); !errors.Is(err, ErrNotFound) {
+		t.Errorf("a form message that is gone: %v, want ErrNotFound", err)
+	}
+	if err := s.correctRow(ctx, a, "2026-9999", "name", "Ada", orderCorrections["name"]); !errors.Is(err, ErrErased) {
+		t.Errorf("an order that is gone: %v, want ErrErased", err)
+	}
+}
+
 func TestALegacyFormMessageIsCorrected(t *testing.T) {
 	_, database := newTestStore(t)
 	ctx := context.Background()
