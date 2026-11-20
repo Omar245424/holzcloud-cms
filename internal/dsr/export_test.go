@@ -3,12 +3,15 @@ package dsr
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/holzcloud/holzcloud-cms/internal/i18n"
 	"github.com/holzcloud/holzcloud-cms/internal/legal"
+	"github.com/holzcloud/holzcloud-cms/internal/plugin"
 	"github.com/holzcloud/holzcloud-cms/internal/privacy"
 )
 
@@ -69,6 +72,36 @@ func TestTheExportHoldsTheRecords(t *testing.T) {
 	}
 	if string(got.Incomplete) != "[]" {
 		t.Errorf("incomplete = %s, want []", got.Incomplete)
+	}
+}
+
+// A source that failed is named by a fixed kind of failure in the file the
+// person receives, never by the error's own text: a plugin's error is its
+// free text, and a database error may quote a value.
+func TestTheExportNamesAFailureByItsKindOnly(t *testing.T) {
+	res := &Result{Email: "ada@example.com", Failed: []SourceError{
+		{Source: "plugin:kontaktformular", Err: fmt.Errorf("%w: kontaktformular: Bob Muster <bob@example.com> wrote twice", plugin.ErrPrivacyFailed)},
+		{Source: "plugin:bestellung", Err: fmt.Errorf("%w: bestellung", plugin.ErrNoPrivacyAnswer)},
+		{Source: "plugin:suche", Err: fmt.Errorf("%w: suche", plugin.ErrWroteDuringFind)},
+		{Source: "plugin:alt", Err: fmt.Errorf("%w: alt", plugin.ErrNotServed)},
+		{Source: "plugin:langsam", Err: fmt.Errorf("call: %w", context.DeadlineExceeded)},
+		{Source: "orders", Err: errors.New(`orders: near "carol@example.com": syntax error`)},
+	}}
+	e := BuildExport(res, 1, "Holzwerk", time.Now())
+	want := []string{"plugin_failed", "plugin_no_answer", "plugin_wrote_during_find", "plugin_not_served", "timeout", "database"}
+	if len(e.Incomplete) != len(want) {
+		t.Fatalf("incomplete = %+v", e.Incomplete)
+	}
+	for i, f := range e.Incomplete {
+		if f.Source != res.Failed[i].Source || f.Error != want[i] {
+			t.Errorf("incomplete[%d] = %+v, want %s %s", i, f, res.Failed[i].Source, want[i])
+		}
+	}
+	raw, _ := json.Marshal(e)
+	for _, leak := range []string{"bob@example.com", "Bob Muster", "carol@example.com", "syntax"} {
+		if strings.Contains(string(raw), leak) {
+			t.Errorf("the export carries %q from an error's text", leak)
+		}
 	}
 }
 

@@ -14,11 +14,14 @@ package dsr
 // stops where it would harm the rights of others (GDPR Art. 15(4)).
 
 import (
+	"context"
+	"errors"
 	"sort"
 	"time"
 
 	"github.com/holzcloud/holzcloud-cms/internal/i18n"
 	"github.com/holzcloud/holzcloud-cms/internal/legal"
+	"github.com/holzcloud/holzcloud-cms/internal/plugin"
 )
 
 // Export is the file.
@@ -190,11 +193,41 @@ type ExportHolder struct {
 	Reason  string `json:"reason"`
 }
 
-// ExportFailure is a source that could not be searched. The error text is
-// the program's own, never a value from a record.
+// ExportFailure is a source that could not be searched. Error is the kind
+// of failure (ExportFailureKind), never the error's own text.
 type ExportFailure struct {
 	Source string `json:"source"`
 	Error  string `json:"error"`
+}
+
+// The kinds of failure the file names.
+const (
+	ExportFailedPlugin      = "plugin_failed"
+	ExportFailedNoAnswer    = "plugin_no_answer"
+	ExportFailedWroteOnFind = "plugin_wrote_during_find"
+	ExportFailedNotServed   = "plugin_not_served"
+	ExportFailedTimeout     = "timeout"
+	ExportFailedDatabase    = "database"
+)
+
+// ExportFailureKind is the fixed kind of one failure, for the file handed
+// to the person. The error's text never goes there: a plugin's error is its
+// own free text and may hold anything, another person's data included, and
+// a database error may quote a value.
+func ExportFailureKind(err error) string {
+	switch {
+	case errors.Is(err, plugin.ErrPrivacyFailed):
+		return ExportFailedPlugin
+	case errors.Is(err, plugin.ErrNoPrivacyAnswer):
+		return ExportFailedNoAnswer
+	case errors.Is(err, plugin.ErrWroteDuringFind):
+		return ExportFailedWroteOnFind
+	case errors.Is(err, plugin.ErrNotServed):
+		return ExportFailedNotServed
+	case errors.Is(err, context.DeadlineExceeded):
+		return ExportFailedTimeout
+	}
+	return ExportFailedDatabase
 }
 
 // BuildExport turns a search result into the file. Every list is empty
@@ -231,7 +264,7 @@ func BuildExport(res *Result, websiteID int64, websiteName string, now time.Time
 		})
 	}
 	for _, f := range res.Failed {
-		out.Incomplete = append(out.Incomplete, ExportFailure{Source: f.Source, Error: f.Err.Error()})
+		out.Incomplete = append(out.Incomplete, ExportFailure{Source: f.Source, Error: ExportFailureKind(f.Err)})
 	}
 	return out
 }
