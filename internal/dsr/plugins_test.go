@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -207,5 +208,27 @@ func TestFarmShopOrdersJoinTheSearch(t *testing.T) {
 	}
 	if h, ok := plugintestHolder(res, id); !ok || !h.Covered {
 		t.Errorf("bestellung holder = %+v, want covered", h)
+	}
+}
+
+// A plugin may only answer with the kinds the retention job knows how to
+// expire. A record of another kind would be found and erasable, but never
+// expire, and no screen would say so; the source fails instead, and the
+// Privacy screen names the plugin as not searched.
+func TestAPluginRecordOfAnUnknownKindFailsTheSource(t *testing.T) {
+	out := &plugin.PrivacyOut{Records: []plugin.PrivacyRecord{
+		{Key: "nachricht:1", Kind: plugin.PrivacyKindFormSubmission, Time: "2026-11-14T10:00:00Z"},
+		{Key: "abo:1", Kind: "newsletter", Time: "2026-11-14T10:00:00Z"},
+	}}
+	recs, err := pluginRecords("plugin:x", "/admin/websites/1/plugins/x", out)
+	if !errors.Is(err, ErrUnknownKind) || recs != nil {
+		t.Fatalf("pluginRecords = %+v, %v; want ErrUnknownKind and no records", recs, err)
+	}
+	if got := ExportFailureKind(err); got != ExportFailedUnknownKind {
+		t.Errorf("the export names the failure %q, want %q", got, ExportFailedUnknownKind)
+	}
+	out.Records = out.Records[:1]
+	if recs, err := pluginRecords("plugin:x", "/admin/websites/1/plugins/x", out); err != nil || len(recs) != 1 {
+		t.Errorf("a known kind: %+v, %v", recs, err)
 	}
 }

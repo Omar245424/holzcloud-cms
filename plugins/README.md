@@ -176,7 +176,10 @@ host asks, through `privacy`, with one of four operations in `PrivacyIn.Op`:
 | `expire` | `Kind`, `Before`, `Limit` | `Deleted`, `MediaIDs`, and `More` when it stopped at the limit |
 
 `find` is read-only: the host refuses every write during it and reports a plugin
-that tried one as not searched. `erase` refuses a key that is not one of the
+that tried one as not searched. A record's `Kind` is `form_submission` or
+`order`, the two kinds the retention job asks plugins to expire; a `find` that
+answers with any other kind is reported as not searched too, because such a
+record would never expire. `erase` refuses a key that is not one of the
 plugin's own records before it deletes anything. Media ids are a claim: the
 host deletes only a file that `KeepFiles` stored for this plugin on this
 website, and refuses and reports any other — another website's, the operator's

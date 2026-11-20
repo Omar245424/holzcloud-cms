@@ -2,6 +2,8 @@ package dsr
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -98,11 +100,33 @@ func (p pluginSource) Find(ctx context.Context, websiteID int64, email string) (
 	if err != nil {
 		return nil, err
 	}
-	link := "/admin/websites/" + strconv.FormatInt(websiteID, 10) + "/plugins/" + p.id
+	return pluginRecords(p.Name(), "/admin/websites/"+strconv.FormatInt(websiteID, 10)+"/plugins/"+p.id, out)
+}
+
+// ErrUnknownKind is a plugin that answered find with a record of a kind the
+// retention job does not expire.
+var ErrUnknownKind = errors.New("dsr: a plugin answered with a record of a kind nothing expires")
+
+// pluginKinds are the kinds a plugin's record may have: the ones the
+// retention job asks plugins to expire (expireKind).
+var pluginKinds = map[string]bool{plugin.PrivacyKindFormSubmission: true, plugin.PrivacyKindOrder: true}
+
+// pluginRecords are a plugin's find answer as records of the source.
+//
+// A record of any other kind than pluginKinds fails the whole source with
+// ErrUnknownKind: it could be found and erased, but the retention job would
+// never expire it and no screen would say so. Failed, the plugin is named
+// as not searched, which the operator sees.
+func pluginRecords(source, link string, out *plugin.PrivacyOut) ([]Record, error) {
+	for _, r := range out.Records {
+		if !pluginKinds[r.Kind] {
+			return nil, fmt.Errorf("%w: %s, kind %q", ErrUnknownKind, source, r.Kind)
+		}
+	}
 	recs := make([]Record, 0, len(out.Records))
 	for _, r := range out.Records {
 		rec := Record{
-			Source:      p.Name(),
+			Source:      source,
 			Key:         r.Key,
 			Kind:        r.Kind,
 			Label:       r.Label,

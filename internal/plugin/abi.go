@@ -615,7 +615,9 @@ type PrivacyField struct {
 type PrivacyRecord struct {
 	// Key is the plugin's storage key, unique within the plugin and website.
 	Key string `json:"key"`
-	// Kind is one of the PrivacyKind constants.
+	// Kind is one of the PrivacyKind constants, the kinds the retention job
+	// expires. A find answer with any other kind fails the plugin's search
+	// (dsr.ErrUnknownKind): such a record would never expire.
 	Kind  string `json:"kind"`
 	Label string `json:"label"`
 	// Time is when the record came in.

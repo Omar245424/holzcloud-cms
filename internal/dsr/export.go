@@ -206,6 +206,7 @@ const (
 	ExportFailedNoAnswer    = "plugin_no_answer"
 	ExportFailedWroteOnFind = "plugin_wrote_during_find"
 	ExportFailedNotServed   = "plugin_not_served"
+	ExportFailedUnknownKind = "plugin_unknown_kind"
 	ExportFailedTimeout     = "timeout"
 	ExportFailedDatabase    = "database"
 )
@@ -224,6 +225,8 @@ func ExportFailureKind(err error) string {
 		return ExportFailedWroteOnFind
 	case errors.Is(err, plugin.ErrNotServed):
 		return ExportFailedNotServed
+	case errors.Is(err, ErrUnknownKind):
+		return ExportFailedUnknownKind
 	case errors.Is(err, context.DeadlineExceeded):
 		return ExportFailedTimeout
 	}
