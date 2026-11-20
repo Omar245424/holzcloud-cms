@@ -3,6 +3,7 @@ package dsr
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -130,13 +131,40 @@ func (s *findCountingSource) Find(context.Context, int64, string) ([]Record, err
 	return nil, nil
 }
 
+// A stored address the checkout or a plugin took in a laxer shape than one
+// bare address — with a name, a slash, two of them — is still the person's,
+// and the search finds it as stored. The term only has to name somebody.
+func TestFindFindsAnAddressAsStored(t *testing.T) {
+	_, database := newTestStore(t)
+	ctx := context.Background()
+	a := website(t, database, "A")
+	svc := NewService(database)
+	for i, stored := range []string{"Ada <ada@example.com>", "a/b@example.com", "ada@example.com, bob@example.com", "ada@example.com?x"} {
+		number := fmt.Sprintf("2026-%04d", i+1)
+		findOrder(t, database, a, number, stored)
+		res, err := svc.Find(ctx, a, "  "+stored+" ")
+		if err != nil {
+			t.Errorf("Find(%q) = %v", stored, err)
+			continue
+		}
+		if len(res.Records) != 1 || res.Records[0].Key != number {
+			t.Errorf("Find(%q) found %+v, want the order %s", stored, res.Records, number)
+		}
+		rep, err := svc.Erase(ctx, a, "CH", EraseOptions{Email: stored, Sources: map[string]bool{EraseOrders: true}})
+		if err != nil || len(rep.Reduced) != 1 {
+			t.Errorf("Erase(%q) = %+v, %v; want the order reduced", stored, rep, err)
+		}
+	}
+}
+
 func TestFindRefusesWhatIsNotAnAddress(t *testing.T) {
 	_, database := newTestStore(t)
 	a := website(t, database, "A")
 	svc := NewService(database)
 	counter := &findCountingSource{}
 	svc.extra = []Source{counter}
-	for _, bad := range []string{"", "   ", "ada@example.com?bcc=x"} {
+	for _, bad := range []string{"", "   ", "nobody", "ada@example.com\nbcc@example.com",
+		strings.Repeat("a", MaxEmail) + "@example.com"} {
 		if _, err := svc.Find(context.Background(), a, bad); !errors.Is(err, ErrBadEmail) {
 			t.Errorf("Find(%q) = %v, want ErrBadEmail", bad, err)
 		}

@@ -424,7 +424,12 @@ website keeps under it (`dsr.Service.Find`):
   assembled forms and their attachments — and the farm shop from 1.1.0, its
   orders.
 
-The address has to be one bare address (`TestThePrivacyScreenRefusesWhatIsNotAnAddress`);
+The address has to name somebody — one line with an @ in it — and is searched
+as typed, so an address the shop or a plugin stored in a laxer shape (with a
+name, a slash, two of them) is still found, handed over and erased
+(`TestThePrivacyScreenRefusesWhatIsNotAnAddress`, `TestFindFindsAnAddressAsStored`);
+the checkout itself now takes one bare address only
+(`TestTheCheckoutTakesOneBareAddress`);
 its letter case does not matter (`TestFindIgnoresLetterCase`), and the search
 never reaches another website's records (`TestFindStaysOnItsWebsite`,
 `TestThePrivacyScreenOfAnotherWebsiteShowsNothing`). An answer that leaves

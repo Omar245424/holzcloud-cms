@@ -21,7 +21,6 @@ package dsr
 import (
 	"context"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/alexedwards/scs/v2"
@@ -192,8 +191,9 @@ func (s *Service) SetActivity(a *activity.Store) { s.activity = a }
 
 // Find searches every source of the website for the address.
 //
-// The address is trimmed and must be one bare address (ValidEmail); anything
-// else is ErrBadEmail before any store is asked. A source that fails is
+// The address is trimmed and has to name somebody (SearchTerm): one line
+// with an @, at most MaxEmail characters, in whatever shape the stores took
+// it in. Anything else is ErrBadEmail before any store is asked. A source that fails is
 // recorded in Result.Failed and the walk goes on.
 //
 // Find searches the staff accounts too. It is the search the service works
@@ -213,8 +213,8 @@ func (s *Service) FindFor(ctx context.Context, websiteID int64, email string, ad
 }
 
 func (s *Service) find(ctx context.Context, websiteID int64, email string, accounts bool) (*Result, error) {
-	email = strings.TrimSpace(email)
-	if !ValidEmail(email) {
+	email, ok := SearchTerm(email)
+	if !ok {
 		return nil, ErrBadEmail
 	}
 	res := &Result{WebsiteID: websiteID, Email: email}

@@ -138,7 +138,7 @@ func TestThePrivacyExportIsADownload(t *testing.T) {
 		t.Errorf("records.orders = %+v, want the order 2026-0043", got.Records["orders"])
 	}
 
-	for _, bad := range []string{"", "?email=", "?email=nobody", "?email=ada@example.com%3Fbcc%3Dx"} {
+	for _, bad := range []string{"", "?email=", "?email=nobody", "?email=ada@example.com%0Abcc@example.com"} {
 		rec := privacyGet(t, h, sm, h.HandlePrivacyExport, privacyScreen(ws.ID)+"/export.json"+bad, ws.ID)
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("%q: status %d, want 400", bad, rec.Code)

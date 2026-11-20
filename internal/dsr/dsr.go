@@ -32,6 +32,8 @@ import (
 	"errors"
 	"net/mail"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/holzcloud/holzcloud-cms/internal/i18n"
 )
@@ -59,6 +61,31 @@ func ValidEmail(s string) bool {
 	}
 	addr, err := mail.ParseAddress(s)
 	return err == nil && addr.Name == "" && addr.Address == s
+}
+
+// SearchTerm is the address a search for a person's records is made with:
+// s trimmed, and ok when it names somebody — one line, at most MaxEmail
+// characters, with an @ in it.
+//
+// Looser than ValidEmail on purpose. ValidEmail guards what becomes a mailto:
+// link or a mail header; a search term becomes neither, only a parameter of
+// a prepared statement and an escaped value on a page. And what has to be
+// found is what the stores hold: the checkout, the legacy contact form and
+// the plugins took addresses in laxer shapes — "Ada <ada@example.com>",
+// "a/b@example.com", two addresses with a comma — and a person whose stored
+// address ValidEmail refuses could otherwise be neither found, nor handed
+// their data, nor erased.
+func SearchTerm(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" || !strings.Contains(s, "@") || utf8.RuneCountInString(s) > MaxEmail {
+		return s, false
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			return s, false
+		}
+	}
+	return s, true
 }
 
 // KindOptOut is a request not to sell or share personal information.
