@@ -34,8 +34,9 @@ import (
 // erasure needs the publishing right (refuseReadOnly, asked first), because
 // what it deletes does not come back, and the staff account part needs an
 // administrator — the account belongs to the installation, not to this
-// website. A box an editor ticks for the account is ignored and the result
-// says so.
+// website. An editor is offered no account box, and a box posted anyway is
+// ignored; the result lists the account as kept, and an erasure that leaves
+// anything — an account, a group not ticked — is answered as partly granted.
 //
 // The POST sends the address, the request it answers and the ticked groups,
 // and nothing else is read from it: no record key, id or media id. dsr.Erase
@@ -241,14 +242,6 @@ func eraseQuery(email string, requestID int64) string {
 	return q.Encode()
 }
 
-// eraseGroupOf is the group a record's source belongs to.
-func eraseGroupOf(source string) string {
-	if strings.HasPrefix(source, "plugin:") {
-		return dsr.ErasePlugins
-	}
-	return source
-}
-
 // erasureDate is the date a record is deleted, as the screens print it. The
 // date is 1 January in UTC; it is printed in UTC so that no clock west of
 // Greenwich turns it into 31 December.
@@ -322,7 +315,7 @@ func (h *Handler) HandlePrivacyErase(w http.ResponseWriter, r *http.Request) err
 	present := map[string]bool{}
 	for _, it := range prev.Items {
 		v := erasureViewOf(it, prev.Holders)
-		group := eraseGroupOf(it.Source)
+		group := dsr.EraseGroup(it.Source)
 		switch {
 		case group == dsr.EraseAccounts:
 			data.Accounts = append(data.Accounts, v)
@@ -376,7 +369,7 @@ func (h *Handler) erasePrivacy(w http.ResponseWriter, r *http.Request, ws *domai
 	opt := dsr.EraseOptions{
 		Email:       email,
 		Sources:     sources,
-		Accounts:    sources[dsr.EraseAccounts] && h.isAdmin(r),
+		Accounts:    h.isAdmin(r),
 		ActorUserID: h.sm.GetInt64(ctx, auth.SessionKeyUserID),
 		ActorEmail:  h.sm.GetString(ctx, auth.SessionKeyUserEmail),
 		RequestID:   max(requestID, 0),

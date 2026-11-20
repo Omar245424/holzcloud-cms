@@ -309,6 +309,15 @@ func TestOnlyAnAdministratorMayEraseAnAccount(t *testing.T) {
 	if !strings.Contains(result, retentionSays("Only an administrator can erase a staff account.")) {
 		t.Error("the result does not say why the account stayed")
 	}
+	// What the editor's page really posts: no account box at all. The
+	// account is still reported as kept.
+	if rec, bad := editor.post(ws.ID, url.Values{"email": {"ada@example.com"}, "quelle": {"orders", "mail"}}, false); rec.Code != http.StatusSeeOther || bad != "" {
+		t.Fatalf("the editor's erasure without the box: %d, %q", rec.Code, bad)
+	}
+	result = editor.get(h.HandlePrivacyErased, erasedPage(ws.ID), ws.ID).Body.String()
+	if !exists() || !strings.Contains(result, retentionSays("Only an administrator can erase a staff account.")) {
+		t.Error("without the box, the result does not say the account stayed")
+	}
 
 	// An administrator: offered, unticked, and erased when ticked.
 	admin := &eraseClient{t: t, h: h, sm: sm, user: chef, role: user.RoleAdmin, fresh: true}

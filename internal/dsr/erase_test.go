@@ -703,6 +703,98 @@ func TestTheRequestIsAnswered(t *testing.T) {
 	}
 }
 
+// A record the erasure leaves alone — its group not ticked, or a staff
+// account the eraser may not erase — is reported as kept, and the request is
+// answered partly, never granted.
+func TestWhatTheErasureLeavesIsKeptAndPartly(t *testing.T) {
+	ctx := i18n.WithLang(context.Background(), i18n.Source)
+
+	for _, group := range []string{EraseOrders, EraseFormMessages, EraseMail} {
+		t.Run("only "+group+" ticked", func(t *testing.T) {
+			st, database := newTestStore(t)
+			a := website(t, database, "A")
+			s := NewService(database)
+			erasetestOrder(t, database, a, "2026-0001", "ada@example.com")
+			findExec(t, database, `INSERT INTO form_messages (website_id, name, email, subject, body, created_at)
+				VALUES ($1, 'Ada', 'ada@example.com', 'Frage', 'Text', '2026-02-01T09:00:00Z')`, a)
+			findExec(t, database, `INSERT INTO mail_outbox (website_id, recipient, subject, body, created_at)
+				VALUES ($1, 'ada@example.com', 'Kopie', 'Text', '2026-02-01T09:00:01Z')`, a)
+			req := expiretestRequest(t, database, a, KindErasure, erasetestNow.AddDate(0, 0, -3), time.Time{})
+			opt := erasetestOrders(s)
+			opt.Sources = map[string]bool{group: true}
+			opt.RequestID = req
+			rep, err := s.Erase(ctx, a, "CH", opt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r, _ := st.Get(ctx, a, req)
+			if r == nil || r.Outcome != OutcomePartly {
+				t.Errorf("only %s ticked: %+v, want partly", group, r)
+			}
+			left := 0
+			for _, it := range rep.Kept {
+				if it.Source != "requests" {
+					left++
+					if it.Action != ActionKeep || it.Reason != eraseNotChosen || it.Until != nil {
+						t.Errorf("only %s ticked: kept %+v, want the not-chosen sentence", group, it)
+					}
+				}
+			}
+			if left == 0 {
+				t.Errorf("only %s ticked: nothing reported as kept: %+v", group, rep.Kept)
+			}
+		})
+	}
+
+	t.Run("plugins unticked", func(t *testing.T) {
+		st, database := newTestStore(t)
+		a := website(t, database, "A")
+		s, _, seed, contact := erasetestPlugins(t, database, a)
+		key, msg := expiretestMessage(time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), "aaaaaaaa", 0)
+		seed(contact, a, key, msg)
+		req := expiretestRequest(t, database, a, KindErasure, erasetestNow.AddDate(0, 0, -3), time.Time{})
+		opt := erasetestOrders(s, EraseOrders)
+		opt.RequestID = req
+		rep, err := s.Erase(ctx, a, "CH", opt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if it, ok := erasetestItem(rep.Kept, "plugin:"+contact, key); !ok || it.Reason != eraseNotChosen {
+			t.Errorf("the plugin's record is not reported as kept: %+v", rep.Kept)
+		}
+		if r, _ := st.Get(ctx, a, req); r == nil || r.Outcome != OutcomePartly {
+			t.Errorf("plugins unticked: %+v, want partly", r)
+		}
+	})
+
+	t.Run("an account a non-administrator cannot erase", func(t *testing.T) {
+		s, database, _, _ := installationService(t)
+		st := NewStore(database)
+		a := website(t, database, "A")
+		staff := installationAccount(t, database, "ada@example.com", user.RoleEditor, erasetestNow.AddDate(-1, 0, 0), nil, a)
+		editor := installationAccount(t, database, "ed@example.com", user.RoleEditor, erasetestNow.AddDate(-1, 0, 0), nil, a)
+		installationAccount(t, database, "chef@example.com", user.RoleAdmin, erasetestNow.AddDate(-1, 0, 0), nil)
+		req := expiretestRequest(t, database, a, KindErasure, erasetestNow.AddDate(0, 0, -3), time.Time{})
+		// The page offers an editor no account box: the groups it posts
+		// never name the account.
+		opt := erasetestOrders(s, EraseOrders, EraseFormMessages, EraseMail, ErasePlugins)
+		opt.ActorUserID, opt.RequestID = editor, req
+		rep, err := s.Erase(ctx, a, "CH", opt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if erasetestCount(t, database, `SELECT COUNT(*) FROM users WHERE id = $1`, staff) != 1 {
+			t.Fatal("an editor erased a staff account")
+		}
+		if it, ok := erasetestItem(rep.Kept, EraseAccounts, strconv.FormatInt(staff, 10)); !ok || it.Reason != eraseAccountsAdminOnly {
+			t.Errorf("the account is not reported as kept for an administrator: %+v", rep.Kept)
+		}
+		if r, _ := st.Get(ctx, a, req); r == nil || r.Outcome != OutcomePartly {
+			t.Errorf("with the account left: %+v, want partly", r)
+		}
+	})
+}
+
 func TestErasureLogsNoAddress(t *testing.T) {
 	_, database := newTestStore(t)
 	a := website(t, database, "A")

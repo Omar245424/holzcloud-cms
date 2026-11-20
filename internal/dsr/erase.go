@@ -97,10 +97,11 @@ type EraseOptions struct {
 	// Email is the person's address; the records are found by it again.
 	Email string
 	// Sources are the groups to erase, by the Erase* names. A group that is
-	// not ticked is left as it is.
+	// not ticked is left as it is, and its records are reported as kept.
 	Sources map[string]bool
-	// Accounts allows the staff account to be erased. Only an administrator
-	// may; the caller decides who that is.
+	// Accounts allows the staff account to be erased: true when the caller
+	// is an administrator, the only one who may. Without it a staff account
+	// the search finds is kept and reported as such, ticked or not.
 	Accounts bool
 	// ActorUserID and ActorEmail are the staff member who erases, for the
 	// activity log and so that nobody erases their own account from here.
@@ -200,6 +201,9 @@ var (
 	eraseAccountsSentence = i18n.N("The staff account is deleted for the whole installation, with its sessions. The activity log keeps the staff member's address as the record of what they did.")
 	// eraseAccountsAdminOnly is why a ticked account stayed.
 	eraseAccountsAdminOnly = i18n.N("Only an administrator can erase a staff account.")
+	// eraseNotChosen is why a record of a group the operator did not tick
+	// stayed.
+	eraseNotChosen = i18n.N("Not chosen for this erasure.")
 	// The answers the erasure records on the request it was made for.
 	erasePartlyBasis  = i18n.N("Erased; records the law requires are kept, reduced, until their periods end.")
 	eraseGrantedBasis = i18n.N("Erased.")
@@ -356,11 +360,17 @@ func (s *Service) Erase(ctx context.Context, websiteID int64, country string, op
 		if !ok {
 			continue
 		}
-		switch {
-		case rec.Source == EraseOrders:
-			if !opt.Sources[EraseOrders] {
-				continue
-			}
+		// A record the erasure leaves alone is reported as kept, with the
+		// reason: an erasure that leaves something is never answered as
+		// granted.
+		switch group := EraseGroup(rec.Source); {
+		case group == "requests":
+			rep.Kept = append(rep.Kept, it)
+		case group == EraseAccounts && !opt.Accounts:
+			rep.Kept = append(rep.Kept, keptWhole(it, eraseAccountsAdminOnly))
+		case !opt.Sources[group]:
+			rep.Kept = append(rep.Kept, keptWhole(it, eraseNotChosen))
+		case group == EraseOrders:
 			done, err := s.reduceOrder(ctx, websiteID, rec.Key, opt.Email, now, it.Until)
 			switch {
 			case err != nil:
@@ -368,35 +378,17 @@ func (s *Service) Erase(ctx context.Context, websiteID int64, country string, op
 			case done:
 				rep.Reduced = append(rep.Reduced, it)
 			}
-		case rec.Source == EraseFormMessages:
-			if opt.Sources[EraseFormMessages] {
-				s.eraseRow(ctx, websiteID, rec, `DELETE FROM form_messages WHERE website_id = $1 AND id = $2`, rec.Key, rep)
-			}
-		case rec.Source == EraseMail:
-			if !opt.Sources[EraseMail] {
-				continue
-			}
+		case group == EraseFormMessages:
+			s.eraseRow(ctx, websiteID, rec, `DELETE FROM form_messages WHERE website_id = $1 AND id = $2`, rec.Key, rep)
+		case group == EraseMail:
 			if id, ok := strings.CutPrefix(rec.Key, "outbox-"); ok {
 				s.eraseRow(ctx, websiteID, rec, `DELETE FROM outbox WHERE website_id = $1 AND id = $2`, id, rep)
 			} else if id, ok := strings.CutPrefix(rec.Key, "queue-"); ok {
 				s.eraseRow(ctx, websiteID, rec, `DELETE FROM mail_outbox WHERE website_id = $1 AND id = $2`, id, rep)
 			}
-		case rec.Source == "requests":
-			rep.Kept = append(rep.Kept, it)
-		case rec.Source == EraseAccounts:
-			if !opt.Sources[EraseAccounts] {
-				continue
-			}
-			if !opt.Accounts {
-				it.Action, it.Reason = ActionKeep, eraseAccountsAdminOnly
-				rep.Kept = append(rep.Kept, it)
-				continue
-			}
+		case group == EraseAccounts:
 			s.eraseAccount(ctx, websiteID, rec, opt.ActorUserID, rep)
-		case strings.HasPrefix(rec.Source, "plugin:"):
-			if !opt.Sources[ErasePlugins] {
-				continue
-			}
+		case group == ErasePlugins:
 			if _, seen := plugins[rec.Source]; !seen {
 				pluginOrder = append(pluginOrder, rec.Source)
 			}
@@ -412,6 +404,22 @@ func (s *Service) Erase(ctx context.Context, websiteID int64, country string, op
 	}
 	s.logErasure(ctx, websiteID, opt, rep)
 	return rep, nil
+}
+
+// EraseGroup is the group the operator ticks for a record's source: a
+// plugin's records are one group, the core sources their own.
+func EraseGroup(source string) string {
+	if strings.HasPrefix(source, "plugin:") {
+		return ErasePlugins
+	}
+	return source
+}
+
+// keptWhole is a record the erasure leaves as it is, with the reason.
+func keptWhole(it ErasureItem, reason string) ErasureItem {
+	it.Action, it.Reason = ActionKeep, reason
+	it.Gone, it.Kept, it.Basis, it.Until = nil, nil, "", nil
+	return it
 }
 
 // eraseRow deletes one row a search found, by its id and the website, and

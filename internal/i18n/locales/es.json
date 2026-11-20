@@ -1121,6 +1121,7 @@
 "None — only for a server on this machine": "Ninguno: solo para un servidor en esta máquina",
 "Norwegian": "noruego",
 "Not an input but a heading over the fields that follow.": "No es una entrada, sino un encabezado sobre los campos siguientes.",
+"Not chosen for this erasure.": "No elegido para este borrado.",
 "Not deleted by the retention job": "No eliminado por la tarea de conservación",
 "Not erased": "No borrado",
 "Not erased: these plugins keep data for this website and do not answer the privacy hook.": "No borrado: estos plugins guardan datos de este sitio web y no responden al hook de privacidad.",

@@ -1121,6 +1121,7 @@
 "None — only for a server on this machine": "Keine – nur für einen Server auf diesem Rechner",
 "Norwegian": "Norwegisch",
 "Not an input but a heading over the fields that follow.": "Keine Eingabe, sondern eine Überschrift über den folgenden Feldern.",
+"Not chosen for this erasure.": "Für diese Löschung nicht ausgewählt.",
 "Not deleted by the retention job": "Vom Aufbewahrungs-Job nicht gelöscht",
 "Not erased": "Nicht gelöscht",
 "Not erased: these plugins keep data for this website and do not answer the privacy hook.": "Nicht gelöscht: Diese Plugins bewahren Daten dieser Website auf und beantworten den Datenschutz-Hook nicht.",
