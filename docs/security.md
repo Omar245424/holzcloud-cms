@@ -410,7 +410,10 @@ website keeps under it (`dsr.Service.Find`):
 - the contact messages from before the contact-form plugin (`form_messages`);
 - the website's privacy requests and opt-outs;
 - the mail queue, by recipient and by Reply-To;
-- the staff accounts that work on this website;
+- the staff accounts that work on this website — for an administrator only:
+  the list of accounts is an administrator's screen, so an editor's search,
+  export and printable answer leave them out
+  (`TestOnlyAnAdministratorSeesAStaffAccount`);
 - what the plugins keep, asked through their `privacy` hook
   ([plugins/README.md](../plugins/README.md#the-privacy-hook)): the contact
   form from version 1.6.0 — its messages, the quarantine, the answers of
@@ -619,7 +622,10 @@ member's address, because what an account did has to stay attributable
 When the erasure was opened from an erasure request, that request is answered
 — "granted", or "partly" when something had to stay, with the basis — and a
 request for access or correction is left for its own answer
-(`TestTheRequestIsAnswered`). The erasure writes one `privacy.erase` entry in
+(`TestTheRequestIsAnswered`). Whatever the erasure leaves is listed as kept
+with its reason — a group that was not ticked, a staff account only an
+administrator may erase, whether the box was offered or not — and makes the
+answer "partly", never "granted" (`TestWhatTheErasureLeavesIsKeptAndPartly`). The erasure writes one `privacy.erase` entry in
 the activity log with counts and never the address
 (`TestErasureLogsNoAddress`). The result page is shown once; it names what was
 reduced, until when and why, what failed, and the backups.
