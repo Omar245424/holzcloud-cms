@@ -335,9 +335,13 @@ func BuildRecord(in RecordInput) ProcessingRecord {
 	}
 	orderRetention := i18n.Tf(lang, retentionOrderSays, in.OrderYears) + " " + t(in.OrderPeriod.Basis())
 	if shop {
+		// "Nobody outside this server" and Payrexx in one cell would
+		// contradict each other: without mail, Payrexx stands alone.
 		recipients := mailRecipient
-		if payment {
+		if payment && in.MailConfigured {
 			recipients += "\n" + t(recipientsPayrexx)
+		} else if payment {
+			recipients = t(recipientsPayrexx)
 		}
 		acts = append(acts, Activity{
 			ID: "orders", Name: t(nameOrders), Purpose: t(purposeOrders),

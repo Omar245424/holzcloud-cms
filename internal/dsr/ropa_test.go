@@ -83,6 +83,12 @@ func TestTheRecordFollowsWhatTheWebsiteUses(t *testing.T) {
 		t.Errorf("shop, payment and forms: activities %v, want %v", got, want)
 	}
 
+	// Without mail, the orders' recipients are Payrexx alone, never
+	// "nobody outside this server" beside it.
+	if r := activityOf(t, BuildRecord(in), "orders").Recipients; r != recipientsPayrexx {
+		t.Errorf("orders recipients without mail = %q, want Payrexx alone", r)
+	}
+
 	in.Features.ProtectedPages = true
 	if got := activityIDs(BuildRecord(in)); !slices.Contains(got, "protected_pages") {
 		t.Errorf("protected pages: activities %v lack protected_pages", got)
