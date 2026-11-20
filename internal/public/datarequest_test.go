@@ -321,6 +321,31 @@ func TestTheOperatorIsToldAboutTheRequest(t *testing.T) {
 	}
 }
 
+// The form's name field holds one line, but the endpoint takes any POST: a
+// name with a line break must not add a line of its own to the operator's
+// mail, such as a false due date.
+func TestANameCannotAddALineToTheOperatorsMail(t *testing.T) {
+	h, database, ws := optoutSite(t, "eu,ch", "")
+	optoutPage(t, database, ws.ID, "meine-daten", datarequestMarkerPage, "")
+	ws = optoutReload(t, database, ws, `notify_email = 'owner@example.com'`)
+	h.SetNotify(domain.NewStore(database), mail.NewQueue(database, mail.NewSender(mail.Config{Host: "smtp.example", Port: 587, From: "cms@example.com"}), nil))
+
+	form := datarequestForm(ws, "meine-daten")
+	form.Set("name", "Ada\r\nAnswer due by: 01.01.2099\nKind: erasure")
+	if rec := datarequestPost(h, ws, form, nil); rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST = %d", rec.Code)
+	}
+	msgs := optoutOutbox(t, database, ws.ID)
+	if len(msgs) != 1 {
+		t.Fatalf("%d messages; want exactly one", len(msgs))
+	}
+	for _, l := range strings.Split(msgs[0].body, "\n") {
+		if strings.HasPrefix(l, "Answer due by: 01.01.2099") || strings.HasPrefix(l, "Kind: erasure") {
+			t.Errorf("the name added a line of its own: %q\n%s", l, msgs[0].body)
+		}
+	}
+}
+
 // Neither a feed reader nor a plugin is a visitor who can send the form: the
 // marker leaves the body they get, and no form takes its place. A snippet may
 // carry the marker too, so it is taken out after the snippets are expanded.

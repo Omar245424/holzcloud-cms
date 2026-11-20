@@ -638,11 +638,7 @@ func (h *Handler) optoutNotify(ctx context.Context, ws *domain.Website, req dsr.
 	lang := ws.Locale
 	var b strings.Builder
 	// Label and value, one per line: a list, not a sentence.
-	line := func(label, value string) {
-		if value != "" {
-			b.WriteString(label + ": " + value + "\n")
-		}
-	}
+	line := func(label, value string) { notifyLine(&b, label, value) }
 	line(i18n.T(lang, "Name"), req.Name)
 	line(i18n.T(lang, "E-mail address"), req.Email)
 	line(i18n.T(lang, "Note"), req.Note)

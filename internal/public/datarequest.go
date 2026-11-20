@@ -217,6 +217,22 @@ func (h *Handler) HandleDataRequest(w http.ResponseWriter, r *http.Request) erro
 	})
 }
 
+// notifyLine writes one "label: value" line of a notification to the
+// operator, nothing for an empty value. What a visitor typed cannot start a
+// line of its own: the form's one-line fields hold no line break, but the
+// endpoint takes any POST, and a name carrying "\nAnswer due by: …" would
+// otherwise add a label line the operator trusts. So a line break in the
+// value is followed by an indent, which keeps a note's own lines readable
+// and every one of them visibly inside its field; a carriage return goes.
+func notifyLine(b *strings.Builder, label, value string) {
+	if value == "" {
+		return
+	}
+	value = strings.ReplaceAll(value, "\r", "")
+	value = strings.ReplaceAll(strings.TrimRight(value, "\n"), "\n", "\n    ")
+	b.WriteString(label + ": " + value + "\n")
+}
+
 // dataRequestNotify tells the operator about a stored request, by
 // optoutNotify's rules: only when mail is set up for the website and it has a
 // notification address, in the website's main language, the visitor's
@@ -237,11 +253,7 @@ func (h *Handler) dataRequestNotify(ctx context.Context, ws *domain.Website, req
 	}
 	var b strings.Builder
 	// Label and value, one per line: a list, not a sentence.
-	line := func(label, value string) {
-		if value != "" {
-			b.WriteString(label + ": " + value + "\n")
-		}
-	}
+	line := func(label, value string) { notifyLine(&b, label, value) }
 	line(i18n.T(lang, "Kind"), i18n.T(lang, dsr.KindName(req.Kind)))
 	line(i18n.T(lang, "Name"), req.Name)
 	line(i18n.T(lang, "E-mail address"), req.Email)
