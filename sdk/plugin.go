@@ -288,7 +288,8 @@ type PrivacyRecord struct {
 	// Correctable names the fields your correct accepts.
 	Correctable []string `json:"correctable,omitempty"`
 	// MediaIDs are the record's files, such as the attachments KeepFiles
-	// returned. The host checks each against the website before deleting it.
+	// returned. The host deletes only a file KeepFiles stored for your plugin
+	// on this website; any other id is refused and reported.
 	MediaIDs []int64 `json:"media_ids,omitempty"`
 	// Erased marks a record already reduced to what has to be kept.
 	Erased bool `json:"erased,omitempty"`

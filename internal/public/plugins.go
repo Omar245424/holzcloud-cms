@@ -66,7 +66,7 @@ func (h *Handler) PluginMiddleware(next http.Handler) http.Handler {
 			// the plugin's reach, and hands over the fields as an ordinary
 			// encoded form — so a plugin written before attachments existed
 			// reads exactly what it read before.
-			if body, keeper, took := h.takeAttachments(r, website.ID,
+			if body, keeper, took := h.takeAttachments(r, website.ID, owner,
 				h.plugins.Allows(owner, plugin.PermAttach)); took {
 				in.Body = body
 				in.Files = keeper.List()

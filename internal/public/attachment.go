@@ -41,8 +41,11 @@ const MaxAttachments = 3
 // attachmentKeeper holds one request's files and knows how to store them.
 type attachmentKeeper struct {
 	websiteID int64
-	dataDir   string
-	store     *media.Store
+	// pluginID is the plugin whose form took the files: they are stored as
+	// its own, and only its privacy answer can delete them.
+	pluginID string
+	dataDir  string
+	store    *media.Store
 
 	listed []plugin.AttachedFile
 	// intakes are the checked files, in the same order as listed minus the
@@ -67,7 +70,7 @@ func (k *attachmentKeeper) Keep(ctx context.Context) ([]plugin.KeptFile, error) 
 	}
 	k.done = true
 	for _, in := range k.intakes {
-		m, existed, err := in.intake.Keep(ctx, k.store, k.websiteID, k.dataDir)
+		m, existed, err := in.intake.KeepFor(ctx, k.store, k.websiteID, k.pluginID, k.dataDir)
 		if err != nil {
 			// One file that cannot be written does not lose the others, and
 			// does not lose the message either: the plugin has already decided
@@ -87,7 +90,7 @@ func (k *attachmentKeeper) Keep(ctx context.Context) ([]plugin.KeptFile, error) 
 // It returns the fields as an ordinary encoded form and a keeper for the files.
 // A request that is not multipart, or a plugin without the permission, gets
 // nothing here and reads its body as before.
-func (h *Handler) takeAttachments(r *http.Request, websiteID int64, allowed bool) (body string, keeper *attachmentKeeper, ok bool) {
+func (h *Handler) takeAttachments(r *http.Request, websiteID int64, pluginID string, allowed bool) (body string, keeper *attachmentKeeper, ok bool) {
 	if !allowed || h.mediaStore == nil {
 		return "", nil, false
 	}
@@ -104,7 +107,7 @@ func (h *Handler) takeAttachments(r *http.Request, websiteID int64, allowed bool
 	reader := multipart.NewReader(http.MaxBytesReader(nil, r.Body, outer), params["boundary"])
 
 	fields := url.Values{}
-	keeper = &attachmentKeeper{websiteID: websiteID, dataDir: h.dataDir, store: h.mediaStore}
+	keeper = &attachmentKeeper{websiteID: websiteID, pluginID: pluginID, dataDir: h.dataDir, store: h.mediaStore}
 
 	for {
 		part, err := reader.NextPart()

@@ -1268,3 +1268,88 @@ func TestMigration00068DownAndUp(t *testing.T) {
 		t.Error("retention.since is not set after the trip back up")
 	}
 }
+
+// TestMigration00069DownAndUp gives every file the shipped contact form named
+// before the column existed to that plugin, leaves the operator's own files
+// and a file two plugins name to nobody, and takes the column off and back.
+func TestMigration00069DownAndUp(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(filepath.Join(t.TempDir(), "t.sqlite"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer database.Close()
+	if err := RunMigrations(database.Write); err != nil {
+		t.Fatalf("RunMigrations: %v", err)
+	}
+	provider, err := migrationProvider(database.Write)
+	if err != nil {
+		t.Fatalf("migrationProvider: %v", err)
+	}
+	rollBackTo(t, ctx, provider, 68)
+
+	exec := func(query string, args ...any) int64 {
+		t.Helper()
+		res, err := database.Write.ExecContext(ctx, query, args...)
+		if err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+		id, _ := res.LastInsertId()
+		return id
+	}
+	a := exec(`INSERT INTO websites (name, description) VALUES ('A', '')`)
+	b := exec(`INSERT INTO websites (name, description) VALUES ('B', '')`)
+	for _, id := range []string{"kontaktformular", "anderes"} {
+		exec(`INSERT INTO plugins (id, name, version, manifest, sha256, installed_at, updated_at)
+			VALUES ($1, $1, '1.0.0', '{}', '', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`, id)
+	}
+	file := func(websiteID int64, name string) int64 {
+		return exec(`INSERT INTO media (website_id, filename, original_name, mime_type, size_bytes)
+			VALUES ($1, $2, $2, 'application/pdf', 4)`, websiteID, name)
+	}
+	attachment := file(a, "brief.pdf")
+	logo := file(a, "logo.png")
+	shared := file(a, "geteilt.pdf")
+	elsewhere := file(b, "fremd.pdf")
+	message := func(pluginID string, websiteID int64, key string, mediaID int64) {
+		exec(`INSERT INTO plugin_store (plugin_id, website_id, key, value, updated_at)
+			VALUES ($1, $2, $3, json_object('anhaenge', json_array(json_object('medien_id', $4))), '2026-01-01T00:00:00Z')`,
+			pluginID, websiteID, key, mediaID)
+	}
+	message("kontaktformular", a, "nachricht:1", attachment)
+	message("kontaktformular", a, "nachricht:2", shared)
+	message("anderes", a, "x:1", shared)
+	// Website A's plugin names website B's file: B's file is nobody's.
+	message("kontaktformular", a, "nachricht:3", elsewhere)
+	exec(`INSERT INTO plugin_store (plugin_id, website_id, key, value, updated_at)
+		VALUES ('kontaktformular', $1, 'kaputt', 'not json', '2026-01-01T00:00:00Z')`, a)
+
+	if err := RunMigrations(database.Write); err != nil {
+		t.Fatalf("RunMigrations with the column: %v", err)
+	}
+	owner := func(id int64) string {
+		var s string
+		if err := database.Read.QueryRowContext(ctx, `SELECT owner_plugin FROM media WHERE id = $1`, id).Scan(&s); err != nil {
+			t.Fatalf("owner_plugin: %v", err)
+		}
+		return s
+	}
+	for id, want := range map[int64]string{attachment: "kontaktformular", logo: "", shared: "", elsewhere: ""} {
+		if got := owner(id); got != want {
+			t.Errorf("media %d belongs to %q, want %q", id, got, want)
+		}
+	}
+
+	rollBackTo(t, ctx, provider, 68)
+	var n int
+	if err := database.Read.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('media') WHERE name = 'owner_plugin'`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("owner_plugin after rolling back to 00068: %d, %v", n, err)
+	}
+	if err := RunMigrations(database.Write); err != nil {
+		t.Fatalf("RunMigrations after the trip back up: %v", err)
+	}
+	if got := owner(attachment); got != "kontaktformular" {
+		t.Errorf("after the trip back up the attachment belongs to %q", got)
+	}
+}

@@ -181,8 +181,9 @@ func (s *Service) expirePlugins(ctx context.Context, websiteID int64, kind strin
 // records as it goes.
 //
 // A media id the plugin returns is a claim, so it goes through
-// media.Store.DeleteOwned with this website: an id of another website is
-// refused and is an error of the kind, as is a file that stays on the disk.
+// media.Store.DeleteOwned with this website and the plugin: an id that is
+// not the plugin's own file on this website is refused and is an error of
+// the kind, as is a file that stays on the disk.
 // An id that no longer exists is what was asked for and is not an error.
 func (s *Service) expirePlugin(ctx context.Context, websiteID int64, id, kind string, before time.Time) (int, error) {
 	deleted := 0
@@ -220,13 +221,13 @@ func (s *Service) deleteMedia(ctx context.Context, websiteID int64, pluginID str
 		return &expireError{cause: causeFile, detail: fmt.Sprintf(
 			"media %d of plugin %s: no media store to delete it with", mediaID, pluginID)}
 	}
-	err := s.media.DeleteOwned(ctx, websiteID, mediaID, s.dataDir)
+	err := s.media.DeleteOwned(ctx, websiteID, pluginID, mediaID, s.dataDir)
 	switch {
 	case err == nil:
 		return nil
 	case errors.Is(err, media.ErrNotOwned):
 		return &expireError{cause: causePlugin, detail: fmt.Sprintf(
-			"plugin %s named media %d, which is not this website's; it was left alone", pluginID, mediaID)}
+			"plugin %s named media %d, which is not its own file on this website; it was left alone", pluginID, mediaID)}
 	case errors.Is(err, media.ErrNotFound):
 		// Gone already, for instance deleted in the media library.
 		return nil

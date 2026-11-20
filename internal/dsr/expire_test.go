@@ -215,10 +215,18 @@ func expiretestMessage(at time.Time, suffix string, mediaID int64) (string, map[
 	return "nachricht:" + key, msg
 }
 
-// expiretestAttachment stores a media row and its file for the website.
+// expiretestAttachment stores a media row and its file for the website, as
+// the contact form's attachment.
 func expiretestAttachment(t *testing.T, database *db.DB, dataDir string, websiteID int64, name string) int64 {
 	t.Helper()
-	m, err := media.NewStore(database).Create(context.Background(), websiteID, name, name, "application/pdf", 4, "hash-"+name)
+	return expiretestFile(t, database, dataDir, websiteID, "kontaktformular", name)
+}
+
+// expiretestFile stores a media row and its file for the website, as the
+// plugin's, or as the operator's own when pluginID is "".
+func expiretestFile(t *testing.T, database *db.DB, dataDir string, websiteID int64, pluginID, name string) int64 {
+	t.Helper()
+	m, err := media.NewStore(database).CreateForPlugin(context.Background(), websiteID, pluginID, name, name, "application/pdf", 4, "hash-"+name)
 	if err != nil {
 		t.Fatal(err)
 	}

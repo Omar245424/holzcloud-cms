@@ -525,6 +525,53 @@ func TestAForeignMediaIDIsRefused(t *testing.T) {
 	}
 }
 
+// A plugin can name only files stored for it: the operator's own image of
+// the same website, and another plugin's file, stay where they are, and the
+// erasure and the expiry both say so.
+func TestAPluginCannotDeleteTheOperatorsFile(t *testing.T) {
+	_, database := newTestStore(t)
+	a := website(t, database, "A")
+	s, dir, seed, contact := erasetestPlugins(t, database, a)
+	logo := expiretestFile(t, database, dir, a, "", "logo.pdf")
+	shops := expiretestFile(t, database, dir, a, "bestellung", "beleg.pdf")
+	key, msg := expiretestMessage(time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), "aaaaaaaa", logo)
+	msg["anhaenge"] = []map[string]any{{"medien_id": logo, "name": "logo.pdf"}, {"medien_id": shops, "name": "beleg.pdf"}}
+	seed(contact, a, key, msg)
+
+	rep, err := s.Erase(context.Background(), a, "CH", erasetestOrders(s, ErasePlugins))
+	if err != nil {
+		t.Fatalf("Erase: %v", err)
+	}
+	for _, id := range []int64{logo, shops} {
+		if n := erasetestCount(t, database, `SELECT COUNT(*) FROM media WHERE id = $1`, id); n != 1 {
+			t.Errorf("media %d was deleted on the plugin's word", id)
+		}
+	}
+	for _, name := range []string{"logo.pdf", "beleg.pdf"} {
+		if _, err := os.Stat(filepath.Join(dir, "media", strconv.FormatInt(a, 10), name)); err != nil {
+			t.Errorf("%s is gone from the disk: %v", name, err)
+		}
+	}
+	refused := 0
+	for _, f := range rep.Failed {
+		if ErasureFailure(f.Err) == eraseFailedForeignFile {
+			refused++
+		}
+	}
+	if refused != 2 {
+		t.Errorf("%d refusals reported, want 2: %+v", refused, rep.Failed)
+	}
+
+	// The expiry: the same.
+	seed(contact, a, key, msg)
+	if _, err := s.expirePlugin(context.Background(), a, contact, "form_submission", erasetestNow); err == nil {
+		t.Error("the expiry did not report the files it left alone")
+	}
+	if n := erasetestCount(t, database, `SELECT COUNT(*) FROM media WHERE id IN ($1, $2)`, logo, shops); n != 2 {
+		t.Errorf("the expiry deleted %d of the two files that are not the plugin's", 2-n)
+	}
+}
+
 func TestRequestsAreKeptAndSaySo(t *testing.T) {
 	_, database := newTestStore(t)
 	ctx := context.Background()

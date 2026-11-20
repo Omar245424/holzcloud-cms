@@ -574,9 +574,13 @@ person's address and the groups ticked (`TestErasureNeverCrossesWebsites`).
 **What goes:** the contact messages from before the plugin; the person's mails,
 the order mails and the queue; the contact form's messages, the quarantine
 included, and their attachment files (`TestErasureDeletesFormMessagesAndMail`,
-`TestErasureOfPluginRecords`). A file of another website that a plugin names
-is refused, and a file that stays on the disk is named on the result page
-(`TestAForeignMediaIDIsRefused`, `TestAFileThatStaysIsNamed`).
+`TestErasureOfPluginRecords`). A plugin can only name files stored for it:
+an attachment is recorded as the plugin's when it is kept, and a file of
+another website, of the operator's own — the logo, an image on a page — or of
+another plugin is refused and reported, never deleted on the plugin's word
+(`TestAForeignMediaIDIsRefused`, `TestAPluginCannotDeleteTheOperatorsFile`,
+`TestDeleteOwnedRefusesAFileThePluginDidNotStore`). A file that stays on the
+disk is named on the result page (`TestAFileThatStaysIsNamed`).
 
 **What an order keeps.** An order is the seller's copy of an invoice, which
 bookkeeping and tax law make the seller keep (UStG § 14b in Germany, Art. 958f

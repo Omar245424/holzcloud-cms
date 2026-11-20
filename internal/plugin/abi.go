@@ -624,9 +624,10 @@ type PrivacyRecord struct {
 	// Correctable names the fields correct accepts for this record.
 	Correctable []string `json:"correctable,omitempty"`
 	// MediaIDs are files that belong to the record. They are a claim, not a
-	// fact: the host checks each against the website before it deletes
-	// anything (media.Store.DeleteOwned), so a plugin cannot reach another
-	// website's file by naming its id.
+	// fact: the host deletes only a file stored for this plugin on this
+	// website (files.keep, media.Store.DeleteOwned), so a plugin cannot reach
+	// another website's file, the operator's own — the logo, an image on a
+	// page — or another plugin's by naming its id.
 	MediaIDs []int64 `json:"media_ids,omitempty"`
 	// Erased marks a record already reduced to what the law asks to keep.
 	Erased bool `json:"erased,omitempty"`

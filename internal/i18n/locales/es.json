@@ -210,7 +210,7 @@
 "A period must be between 1 and 600 months.": "Un plazo debe estar entre 1 y 600 meses.",
 "A plugin did not answer.": "Un plugin no respondió.",
 "A plugin extends the CMS without anything being rebuilt. It runs walled off: it cannot read the disk, cannot open a connection to the outside, and can reach the database only through the paths it declared in its manifest. If it hangs it is cut off after two seconds and the page is delivered anyway.": "Una extensión amplía el CMS sin que haya que reconstruir nada. Corre aislada: no puede leer el disco, no puede abrir conexiones al exterior y solo alcanza la base de datos por las vías declaradas en su manifiesto. Si se cuelga, se interrumpe a los dos segundos y la página se sirve igualmente.",
-"A plugin named a file that is not this website's; it was left alone.": "Un plugin indicó un archivo que no es de este sitio web; no se ha tocado.",
+"A plugin named a file that is not its own on this website; it was left alone.": "Un plugin indicó un archivo que no es suyo en este sitio web; no se ha tocado.",
 "A post also appears in the archive, sorted by date. A page stands on its own and usually belongs in a menu. You create your own kinds under “Content kinds”.": "Una entrada aparece además en el archivo, ordenada por fecha. Una página existe por sí misma y suele ir en el menú. Tus propios tipos se crean en «Tipos de contenido».",
 "A price belongs to a product, an author to a post. Showing both everywhere makes the form longer without making it do more.": "Un precio pertenece a un producto, un autor a una entrada. Mostrar ambos en todas partes alarga el formulario sin añadirle nada.",
 "A price cannot be negative.": "Un precio no puede ser negativo.",

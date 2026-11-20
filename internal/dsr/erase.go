@@ -37,9 +37,9 @@ package dsr
 //   - A plugin erases its own records through the privacy hook: one call for
 //     what it deletes (contact-form messages, the quarantine included), one
 //     per order with the date it keeps it until. The media ids it returns
-//     are claims and go through media.Store.DeleteOwned with this website; a
-//     file of another website is refused and reported, a file that stays on
-//     the disk is named.
+//     are claims and go through media.Store.DeleteOwned with this website and
+//     the plugin; a file that is not the plugin's own on this website is
+//     refused and reported, a file that stays on the disk is named.
 //   - The person's privacy requests stay. They are the record of the request
 //     and its answer (CCPA regs § 7101) and what keeps an erasure from being
 //     undone by mistake (§ 7022(e)); the retention job deletes them after
@@ -557,7 +557,9 @@ func pluginKeptLabels(rec Record, names []string) []string {
 }
 
 // eraseMedia removes one file a plugin named for a record it erased. A file
-// of another website is refused and reported; a file that no longer exists
+// that is not the plugin's own on this website — another website's, the
+// operator's, another plugin's — is refused and reported; a file that no
+// longer exists
 // is what was asked for; a file that stays on the disk is named, with the
 // name it has in the media library, read before its row goes.
 func (s *Service) eraseMedia(ctx context.Context, websiteID int64, source string, mediaID int64, rep *ErasureReport) {
@@ -571,12 +573,12 @@ func (s *Service) eraseMedia(ctx context.Context, websiteID int64, source string
 		rep.FileErrors = append(rep.FileErrors, name)
 		return
 	}
-	err := s.media.DeleteOwned(ctx, websiteID, mediaID, s.dataDir)
+	err := s.media.DeleteOwned(ctx, websiteID, strings.TrimPrefix(source, "plugin:"), mediaID, s.dataDir)
 	switch {
 	case err == nil:
 	case errors.Is(err, media.ErrNotOwned):
 		rep.fail(websiteID, source, &eraseError{sentence: eraseFailedForeignFile,
-			detail: fmt.Sprintf("%s named media %d, which is not this website's; it was left alone", source, mediaID)})
+			detail: fmt.Sprintf("%s named media %d, which is not its own file on this website; it was left alone", source, mediaID)})
 	case errors.Is(err, media.ErrNotFound):
 		// Gone already, for instance deleted in the media library.
 	case errors.Is(err, media.ErrFileRemains):
@@ -716,7 +718,7 @@ var (
 	eraseFailedDatabase    = i18n.N("The database refused the deletion.")
 	eraseFailedNotSearched = i18n.N("This store could not be searched, so nothing of it was erased.")
 	eraseFailedPlugin      = i18n.N("The plugin could not erase its records; they are still there.")
-	eraseFailedForeignFile = i18n.N("A plugin named a file that is not this website's; it was left alone.")
+	eraseFailedForeignFile = i18n.N("A plugin named a file that is not its own on this website; it was left alone.")
 	eraseFailedOwnAccount  = i18n.N("Your own account cannot be erased from here.")
 	eraseFailedLastAdmin   = i18n.N("The last administrator cannot be deleted")
 )

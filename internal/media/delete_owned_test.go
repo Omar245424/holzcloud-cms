@@ -13,10 +13,21 @@ import (
 // DeleteOwned is how the retention job and the erasure remove the files of a
 // record a plugin names (Phase 33.2). Every helper here starts with owned.
 
-// ownedFile stores a media row and its file on disk, as an upload does.
+// ownedPlugin is the plugin the files of these tests are stored for.
+const ownedPlugin = "kontaktformular"
+
+// ownedFile stores a media row and its file on disk, as a plugin form's
+// attachment is stored: for ownedPlugin.
 func ownedFile(t *testing.T, s *Store, websiteID int64, dataDir, name string) *Media {
 	t.Helper()
-	m, err := s.Create(context.Background(), websiteID, name, name, "application/pdf", 4, "hash-"+name)
+	return ownedStored(t, s, websiteID, ownedPlugin, dataDir, name)
+}
+
+// ownedStored stores a media row and its file on disk for the plugin, ""
+// for the operator's own upload to the media library.
+func ownedStored(t *testing.T, s *Store, websiteID int64, pluginID, dataDir, name string) *Media {
+	t.Helper()
+	m, err := s.CreateForPlugin(context.Background(), websiteID, pluginID, name, name, "application/pdf", 4, "hash-"+name)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -46,7 +57,7 @@ func TestDeleteOwnedRefusesAnotherWebsitesFile(t *testing.T) {
 	dir := t.TempDir()
 	m := ownedFile(t, s, b, dir, "brief.pdf")
 
-	if err := s.DeleteOwned(ctx, a, m.ID, dir); !errors.Is(err, ErrNotFound) {
+	if err := s.DeleteOwned(ctx, a, ownedPlugin, m.ID, dir); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("DeleteOwned of B's file for A = %v, want ErrNotFound", err)
 	}
 	if got, _ := s.GetByID(ctx, m.ID); got == nil {
@@ -55,7 +66,7 @@ func TestDeleteOwnedRefusesAnotherWebsitesFile(t *testing.T) {
 	if !ownedOnDisk(dir, b, "brief.pdf") {
 		t.Error("B's file is gone")
 	}
-	if err := s.DeleteOwned(ctx, a, 9999, dir); !errors.Is(err, ErrNotFound) {
+	if err := s.DeleteOwned(ctx, a, ownedPlugin, 9999, dir); !errors.Is(err, ErrNotFound) {
 		t.Errorf("DeleteOwned of no file = %v, want ErrNotFound", err)
 	}
 }
@@ -74,7 +85,7 @@ func TestDeleteOwnedReportsAFileThatStays(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chmod(folder, 0o755) })
 
-	err := s.DeleteOwned(ctx, ws, m.ID, dir)
+	err := s.DeleteOwned(ctx, ws, ownedPlugin, m.ID, dir)
 	if !errors.Is(err, ErrFileRemains) {
 		t.Fatalf("DeleteOwned with a file that cannot go = %v, want ErrFileRemains", err)
 	}
@@ -91,7 +102,7 @@ func TestDeleteOwnedReportsAFileThatStays(t *testing.T) {
 	if err := os.Remove(filepath.Join(folder, "weg.pdf")); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteOwned(ctx, ws, gone.ID, dir); err != nil {
+	if err := s.DeleteOwned(ctx, ws, ownedPlugin, gone.ID, dir); err != nil {
 		t.Errorf("DeleteOwned of a file already missing = %v, want nil", err)
 	}
 }
@@ -106,7 +117,7 @@ func TestDeleteOwnedDeletesAFileInUse(t *testing.T) {
 		t.Fatalf("ReplaceUsage: %v", err)
 	}
 
-	if err := s.DeleteOwned(ctx, ws, m.ID, dir); err != nil {
+	if err := s.DeleteOwned(ctx, ws, ownedPlugin, m.ID, dir); err != nil {
 		t.Fatalf("DeleteOwned of a file in use = %v; the record it belonged to expired", err)
 	}
 	if got, _ := s.GetByID(ctx, m.ID); got != nil {
@@ -114,5 +125,27 @@ func TestDeleteOwnedDeletesAFileInUse(t *testing.T) {
 	}
 	if ownedOnDisk(dir, ws, "plan.pdf") {
 		t.Error("the file is still on disk")
+	}
+}
+
+// A plugin's claim reaches only the files stored for that plugin: the
+// operator's own upload — the logo, an image on a page — and another
+// plugin's file are refused, and nothing changes.
+func TestDeleteOwnedRefusesAFileThePluginDidNotStore(t *testing.T) {
+	s, ws := newTestStore(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	logo := ownedStored(t, s, ws, "", dir, "logo.pdf")
+	other := ownedStored(t, s, ws, "bestellung", dir, "fremd.pdf")
+	for _, m := range []*Media{logo, other} {
+		if err := s.DeleteOwned(ctx, ws, ownedPlugin, m.ID, dir); !errors.Is(err, ErrNotOwned) {
+			t.Errorf("DeleteOwned of %s for %s = %v, want ErrNotOwned", m.Filename, ownedPlugin, err)
+		}
+		if got, _ := s.GetByID(ctx, m.ID); got == nil || !ownedOnDisk(dir, ws, m.Filename) {
+			t.Errorf("%s is gone", m.Filename)
+		}
+	}
+	if err := s.DeleteOwned(ctx, ws, "bestellung", other.ID, dir); err != nil {
+		t.Errorf("DeleteOwned of the plugin's own file = %v, want nil", err)
 	}
 }
