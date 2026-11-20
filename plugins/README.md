@@ -185,8 +185,13 @@ seconds as every hook, which is why `expire` works in batches.
 
 Unlike the other hooks, an error your handler returns reaches the host: the SDK
 puts it into the answer, and the host reports the plugin as not searched rather
-than as having found nothing. A plugin that declares `privacy` and registers no
-handler answers nothing, and that is reported the same way.
+than as having found nothing. Return what you already did together with the
+error: an `erase` or `expire` that deleted records and then failed hands back
+their `Deleted` and `MediaIDs`, and the host still counts them and deletes
+their files — once a record is gone, nothing else would find its attachments
+again. The `Records` of a failed call are dropped. A plugin that declares
+`privacy` and registers no handler answers nothing, and that is reported the
+same way.
 
 A plugin that keeps data for a website and does not declare `privacy` is named on
 the Privacy screen as not searched, with how many entries it holds — the

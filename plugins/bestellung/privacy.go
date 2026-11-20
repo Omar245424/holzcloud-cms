@@ -151,18 +151,20 @@ func privacyErase(keys []string, retainUntil string) (plugin.PrivacyOut, error) 
 		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
+	// What is already done goes back with an error: an order reduced before
+	// a later one failed is reduced, and the host has to say so.
 	var out plugin.PrivacyOut
 	for _, key := range keys {
 		raw, ok, err := plugin.Get(key)
 		if err != nil {
-			return plugin.PrivacyOut{}, err
+			return out, err
 		}
 		if !ok {
 			continue
 		}
 		var b order
 		if err := json.Unmarshal([]byte(raw), &b); err != nil {
-			return plugin.PrivacyOut{}, fmt.Errorf("the order %q cannot be read: %w", key, err)
+			return out, fmt.Errorf("the order %q cannot be read: %w", key, err)
 		}
 		b.Email, b.Telefon = "", ""
 		if b.ErasedAt == "" {
@@ -177,10 +179,10 @@ func privacyErase(keys []string, retainUntil string) (plugin.PrivacyOut, error) 
 		b.RetainUntil = keep.Format(time.RFC3339)
 		data, err := json.Marshal(b)
 		if err != nil {
-			return plugin.PrivacyOut{}, err
+			return out, err
 		}
 		if err := plugin.Set(key, string(data)); err != nil {
-			return plugin.PrivacyOut{}, err
+			return out, err
 		}
 		out.Kept = append(out.Kept, plugin.PrivacyKept{Key: key, Fields: keptFields, Until: b.RetainUntil})
 	}
@@ -312,7 +314,8 @@ func privacyExpire(in plugin.PrivacyIn) (plugin.PrivacyOut, error) {
 		return false, nil
 	})
 	if err != nil {
-		return plugin.PrivacyOut{}, err
+		// The orders deleted so far go back with the error.
+		return out, err
 	}
 	plugin.Logf("info", "privacy: %d orders past the retention period removed", out.Deleted)
 	return out, nil

@@ -428,6 +428,11 @@ var privacyOps = map[string]bool{
 // asked to look is refused the write, and its answer is ErrWroteDuringFind
 // rather than records. Each call is bounded by CallTimeout like every hook;
 // expire answers in batches for that reason (PrivacyIn.Limit).
+//
+// A plugin's refusal is ErrPrivacyFailed and comes with the answer it gave:
+// the out of a failed erase or expire still says what was deleted before the
+// failure (Deleted, Kept, MediaIDs), and a caller processes that too. Every
+// other error comes with a nil answer.
 func (m *Manager) Privacy(ctx context.Context, websiteID int64, id string, in PrivacyIn) (*PrivacyOut, error) {
 	if !m.Serves(id, HookPrivacy, websiteID) {
 		return nil, fmt.Errorf("%w: %s", ErrNotServed, id)
@@ -455,7 +460,13 @@ func (m *Manager) Privacy(ctx context.Context, websiteID int64, id string, in Pr
 		return nil, fmt.Errorf("the privacy answer of %s is not valid JSON: %w", id, err)
 	}
 	if out.Error != "" {
-		return nil, fmt.Errorf("%w: %s: %s", ErrPrivacyFailed, id, out.Error)
+		// The answer still says what the plugin did before it failed: an
+		// erase or expire that deleted records and then stopped hands back
+		// their count and their files, which nothing else would find again.
+		// What it found is dropped: half of a find is not an answer.
+		err := fmt.Errorf("%w: %s: %s", ErrPrivacyFailed, id, out.Error)
+		out.Records, out.Error = nil, ""
+		return &out, err
 	}
 	return &out, nil
 }

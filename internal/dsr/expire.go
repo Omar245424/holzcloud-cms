@@ -202,15 +202,18 @@ func (s *Service) expirePlugin(ctx context.Context, websiteID int64, id, kind st
 		})
 		if err != nil {
 			errs = append(errs, pluginFailure(id, err))
-			return deleted, errors.Join(errs...)
 		}
-		deleted += out.Deleted
-		for _, mid := range out.MediaIDs {
-			if err := s.deleteMedia(ctx, websiteID, id, mid); err != nil {
-				errs = append(errs, err)
+		// A plugin that failed halfway still says what it deleted before:
+		// those records are gone, and their files go with them here.
+		if out != nil {
+			deleted += out.Deleted
+			for _, mid := range out.MediaIDs {
+				if err := s.deleteMedia(ctx, websiteID, id, mid); err != nil {
+					errs = append(errs, err)
+				}
 			}
 		}
-		if !out.More {
+		if err != nil || !out.More {
 			return deleted, errors.Join(errs...)
 		}
 	}

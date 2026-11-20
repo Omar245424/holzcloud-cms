@@ -661,6 +661,8 @@ type PrivacyOut struct {
 	// Error is the plugin's refusal. The guest's other hooks turn an error
 	// into a log line and an empty answer, which for this hook would read as
 	// "nothing found"; the SDK puts it here instead, and the host returns it
-	// as ErrPrivacyFailed and ignores the rest of the answer.
+	// as ErrPrivacyFailed. Deleted, Kept and MediaIDs of a failed answer are
+	// what the plugin did before it failed, and come back with the error;
+	// its Records are dropped.
 	Error string `json:"error,omitempty"`
 }

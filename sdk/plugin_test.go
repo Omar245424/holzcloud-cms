@@ -248,17 +248,20 @@ func TestPrivacyIsDispatched(t *testing.T) {
 
 // A privacy handler's error comes back inside the answer: as a Go error it
 // would become a log line and an empty answer, which the host cannot tell
-// from "nothing found".
+// from "nothing found". What the handler did before it failed comes with it
+// — records deleted are gone, and the host still has to delete their files —
+// and what it found does not.
 func TestAPrivacyErrorTravelsInTheAnswer(t *testing.T) {
 	reset()
 	OnPrivacy(func(PrivacyIn) (PrivacyOut, error) {
-		return PrivacyOut{Deleted: 3}, errors.New("key outside the records")
+		return PrivacyOut{Deleted: 3, MediaIDs: []int64{7}, Records: []PrivacyRecord{{Key: "half"}}},
+			errors.New("the store refused a delete")
 	})
 	raw, err := Dispatch("privacy", []byte(`{"op":"erase","keys":["x"]}`))
 	if err != nil {
 		t.Fatalf("the error left as a Go error: %v", err)
 	}
-	if string(raw) != `{"error":"key outside the records"}` {
-		t.Errorf("answer = %s, want the error alone", raw)
+	if string(raw) != `{"deleted":3,"media_ids":[7],"error":"the store refused a delete"}` {
+		t.Errorf("answer = %s, want what was done with the error and no records", raw)
 	}
 }

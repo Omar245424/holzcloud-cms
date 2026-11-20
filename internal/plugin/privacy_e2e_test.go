@@ -396,6 +396,69 @@ func TestTheContactFormErasesWhatItFound(t *testing.T) {
 	}
 }
 
+// An erase or expire that fails halfway hands back what it already did with
+// the error: the messages already deleted, and their attachments' media
+// ids, which nothing would find again once the messages are gone.
+func TestAFailedEraseHandsBackWhatItDid(t *testing.T) {
+	w := privacyInstall(t, "kontaktformular")
+	ctx := context.Background()
+	msg := func(key string, media int64) {
+		w.seed(t, w.a, "nachricht:"+key, map[string]any{
+			"kennung": key, "name": "Ada", "email": "ada@example.com", "text": "x", "zeit": key[:20],
+			"anhaenge": []map[string]any{{"medien_id": media, "name": "a.pdf", "dateiname": "a.pdf"}},
+		})
+	}
+	msg("2024-01-10T09:00:00Z-aaaa", 21)
+	msg("2024-01-11T09:00:00Z-bbbb", 22)
+	msg("2024-01-12T09:00:00Z-cccc", 23)
+	// The database refuses to delete the second message.
+	if _, err := w.store.DB.Write.Exec(`CREATE TRIGGER refuse_second BEFORE DELETE ON plugin_store
+		WHEN old.key = 'nachricht:2024-01-11T09:00:00Z-bbbb'
+		BEGIN SELECT RAISE(ABORT, 'refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := w.m.Privacy(ctx, w.a, w.id, PrivacyIn{Op: PrivacyErase, Keys: []string{
+		"nachricht:2024-01-10T09:00:00Z-aaaa", "nachricht:2024-01-11T09:00:00Z-bbbb", "nachricht:2024-01-12T09:00:00Z-cccc",
+	}})
+	if !errors.Is(err, ErrPrivacyFailed) {
+		t.Fatalf("erase answered %v, want ErrPrivacyFailed", err)
+	}
+	if out == nil || out.Deleted != 1 || len(out.MediaIDs) != 1 || out.MediaIDs[0] != 21 {
+		t.Fatalf("erase handed back %+v, want the first message deleted with its attachment 21", out)
+	}
+
+	out, err = w.m.Privacy(ctx, w.a, w.id, PrivacyIn{Op: PrivacyExpire, Kind: PrivacyKindFormSubmission,
+		Before: "2025-01-01T00:00:00Z", Limit: 10})
+	if !errors.Is(err, ErrPrivacyFailed) {
+		t.Fatalf("expire answered %v, want ErrPrivacyFailed", err)
+	}
+	if out == nil || out.Deleted != 0 || len(out.MediaIDs) != 0 {
+		t.Errorf("expire handed back %+v, want nothing: the refused message is the first one left", out)
+	}
+	if _, err := w.store.DB.Write.Exec(`DROP TRIGGER refuse_second`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.store.DB.Write.Exec(`CREATE TRIGGER refuse_third BEFORE DELETE ON plugin_store
+		WHEN old.key = 'nachricht:2024-01-12T09:00:00Z-cccc'
+		BEGIN SELECT RAISE(ABORT, 'refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+	out, err = w.m.Privacy(ctx, w.a, w.id, PrivacyIn{Op: PrivacyExpire, Kind: PrivacyKindFormSubmission,
+		Before: "2025-01-01T00:00:00Z", Limit: 10})
+	if !errors.Is(err, ErrPrivacyFailed) {
+		t.Fatalf("expire answered %v, want ErrPrivacyFailed", err)
+	}
+	if out == nil || out.Deleted != 1 || len(out.MediaIDs) != 1 || out.MediaIDs[0] != 22 {
+		t.Errorf("expire handed back %+v, want the second message deleted with its attachment 22", out)
+	}
+	// A find that fails hands back no records: half an answer to "what do
+	// you hold" reads as the whole of it.
+	if out, err := w.m.Privacy(ctx, w.a, w.id, PrivacyIn{Op: PrivacyFind, Email: "  "}); err == nil || (out != nil && len(out.Records) != 0) {
+		t.Errorf("a refused find answered %+v, %v", out, err)
+	}
+}
+
 func TestTheContactFormCorrectsNameAndEmail(t *testing.T) {
 	w := privacyInstall(t, "kontaktformular")
 	seedContactForm(t, w)

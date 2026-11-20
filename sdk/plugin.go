@@ -316,8 +316,10 @@ type PrivacyOut struct {
 	More     bool            `json:"more,omitempty"`
 	// Error is filled in by the SDK from the error your handler returns, so
 	// that the host can tell a refusal from "nothing found". Return an error
-	// rather than setting it; the host ignores the rest of an answer that
-	// carries one.
+	// rather than setting it. Return what you already did with it — Deleted,
+	// Kept and MediaIDs of the records erase or expire handled before the
+	// failure — and the host still processes those; Records of a failed
+	// call are dropped.
 	Error string `json:"error,omitempty"`
 }
 
@@ -531,7 +533,13 @@ func privacyCall(payload []byte) ([]byte, error) {
 	}
 	out, err := onPrivacy(in)
 	if err != nil {
-		return json.Marshal(PrivacyOut{Error: err.Error()})
+		// What the handler did before it failed goes back with the error:
+		// records deleted are gone, and the host still has to delete their
+		// files and count them. Records found do not: half an answer to
+		// "what do you hold" would read as the whole of it.
+		out.Records = nil
+		out.Error = err.Error()
+		return json.Marshal(out)
 	}
 	return json.Marshal(out)
 }

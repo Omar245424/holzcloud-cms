@@ -76,26 +76,29 @@ func privacyErase(keys []string) (plugin.PrivacyOut, error) {
 			return plugin.PrivacyOut{}, fmt.Errorf("%q is not a message of this plugin", key)
 		}
 	}
+	// What is already done goes back with an error: a message deleted before
+	// a later one failed is gone, and its attachments' ids are the only way
+	// the host can still find their files.
 	var out plugin.PrivacyOut
 	for _, key := range keys {
 		raw, ok, err := plugin.Get(key)
 		if err != nil {
-			return plugin.PrivacyOut{}, err
+			return out, err
 		}
 		if !ok {
 			// Already gone — deleted by the operator, or by an earlier erase.
 			continue
 		}
 		var n message
-		if json.Unmarshal([]byte(raw), &n) == nil {
-			for _, a := range n.Attachments {
-				out.MediaIDs = append(out.MediaIDs, a.MediaID)
-			}
-		}
+		_ = json.Unmarshal([]byte(raw), &n)
 		if err := plugin.Delete(key); err != nil {
-			return plugin.PrivacyOut{}, err
+			return out, err
 		}
 		out.Deleted++
+		// After the delete: a message that stayed keeps its attachments.
+		for _, a := range n.Attachments {
+			out.MediaIDs = append(out.MediaIDs, a.MediaID)
+		}
 	}
 	plugin.Logf("info", "privacy: %d messages erased, %d attachments handed back", out.Deleted, len(out.MediaIDs))
 	return out, nil
@@ -238,7 +241,9 @@ func privacyExpire(in plugin.PrivacyIn) (plugin.PrivacyOut, error) {
 			return false, nil
 		})
 		if err != nil {
-			return plugin.PrivacyOut{}, err
+			// The messages deleted so far go back with the error, with
+			// their attachments.
+			return out, err
 		}
 		if out.More {
 			break

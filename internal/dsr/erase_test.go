@@ -503,6 +503,43 @@ func TestAnErasedRecordCarriesItsStoredDate(t *testing.T) {
 	}
 }
 
+// A plugin that fails halfway through an erasure still has its deleted
+// records counted and their files removed; the failure is reported, and the
+// record that stayed keeps its file.
+func TestAPluginThatFailsHalfwayLeavesNoOrphanFile(t *testing.T) {
+	_, database := newTestStore(t)
+	a := website(t, database, "A")
+	s, dir, seed, contact := erasetestPlugins(t, database, a)
+	first := expiretestFile(t, database, dir, a, contact, "erste.pdf")
+	second := expiretestFile(t, database, dir, a, contact, "zweite.pdf")
+	k1, m1 := expiretestMessage(time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), "aaaaaaaa", first)
+	k2, m2 := expiretestMessage(time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC), "bbbbbbbb", second)
+	seed(contact, a, k1, m1)
+	seed(contact, a, k2, m2)
+	findExec(t, database, `CREATE TRIGGER refuse_second BEFORE DELETE ON plugin_store
+		WHEN old.key = '`+k2+`' BEGIN SELECT RAISE(ABORT, 'refused'); END`)
+
+	rep, err := s.Erase(context.Background(), a, "CH", erasetestOrders(s, ErasePlugins))
+	if err != nil {
+		t.Fatalf("Erase: %v", err)
+	}
+	if rep.Deleted[ErasePlugins] != 1 {
+		t.Errorf("deleted %v, want the first message counted", rep.Deleted)
+	}
+	if n := erasetestCount(t, database, `SELECT COUNT(*) FROM media WHERE id = $1`, first); n != 0 {
+		t.Error("the first message is gone and its attachment is still in the media library")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "media", strconv.FormatInt(a, 10), "erste.pdf")); !os.IsNotExist(err) {
+		t.Errorf("the first message's file is still on the disk: %v", err)
+	}
+	if n := erasetestCount(t, database, `SELECT COUNT(*) FROM media WHERE id = $1`, second); n != 1 {
+		t.Error("the message that stayed lost its attachment")
+	}
+	if len(rep.Failed) != 1 || ErasureFailure(rep.Failed[0].Err) != eraseFailedPlugin {
+		t.Errorf("failed %+v, want the plugin's failure", rep.Failed)
+	}
+}
+
 func TestAFileThatStaysIsNamed(t *testing.T) {
 	_, database := newTestStore(t)
 	a := website(t, database, "A")

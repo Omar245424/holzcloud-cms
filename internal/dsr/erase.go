@@ -511,6 +511,10 @@ func (s *Service) erasePlugin(ctx context.Context, websiteID int64, source strin
 		out, err := s.plugins.Privacy(ctx, websiteID, id, in)
 		if err != nil {
 			rep.fail(websiteID, source, &eraseError{sentence: eraseFailedPlugin, detail: pluginFailure(id, err).Error()})
+		}
+		// A plugin that failed halfway still says what it did before: the
+		// records it deleted are gone, and their files go with them here.
+		if out == nil {
 			return
 		}
 		rep.Deleted[ErasePlugins] += out.Deleted
