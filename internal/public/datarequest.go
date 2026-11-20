@@ -237,6 +237,15 @@ func notifyLine(b *strings.Builder, label, value string) {
 // optoutNotify's rules: only when mail is set up for the website and it has a
 // notification address, in the website's main language, the visitor's
 // address in the body and never in a header, a mail error logged without it.
+//
+// Because the address is in no header, the Privacy search — which finds
+// queued mail by recipient and Reply-To — does not find this mail, and an
+// erasure does not delete it. That is accepted, not overlooked: a header
+// built from what a stranger typed is the injection T-33.1-15 rules out,
+// the request itself holds the same details and is listed, exported and
+// kept as the record of the request, and the mail leaves the queue a week
+// after it was sent (mail.KeepSent), or 90 days after it was queued when it
+// never was. docs/security.md says so.
 func (h *Handler) dataRequestNotify(ctx context.Context, ws *domain.Website, req dsr.Request) {
 	if h.mail == nil || ws.NotifyEmail == "" || !h.mail.EnabledFor(ctx, ws.ID) {
 		return

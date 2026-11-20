@@ -413,7 +413,12 @@ website keeps under it (`dsr.Service.Find`):
 - the shop's orders, and the mails sent about them;
 - the contact messages from before the contact-form plugin (`form_messages`);
 - the website's privacy requests and opt-outs;
-- the mail queue, by recipient and by Reply-To;
+- the mail queue, by recipient and by Reply-To — not the operator's own
+  notification about a data request or an opt-out, which carries the
+  visitor's address in its text only, never in a header; the request itself
+  holds the same details and is listed and kept, and the notification leaves
+  the queue a week after it was sent, or 90 days after it was queued when it
+  never was;
 - the staff accounts that work on this website — for an administrator only:
   the list of accounts is an administrator's screen, so an editor's search,
   export and printable answer leave them out
