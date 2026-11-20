@@ -1239,6 +1239,13 @@ func newRouter(d routerDeps) (http.Handler, error) {
 	// (Phase 33.2, D-04).
 	adminProtectedMux.HandleFunc("GET /admin/websites/{id}/datenschutz/aufbewahrung", adminHandler.ErrHandler(adminHandler.HandlePrivacyRetention))
 	adminProtectedMux.Handle("POST /admin/websites/{id}/datenschutz/aufbewahrung", requireFresh(http.HandlerFunc(adminHandler.ErrHandler(adminHandler.HandlePrivacyRetention))))
+	// The record of processing activities, on the screen, as a sheet to
+	// print and as JSON (Phase 33.2, DSR-05). It is generated from the
+	// settings and holds no person's data, so it is open to everybody with
+	// access to the website, like the Retention screen.
+	adminProtectedMux.HandleFunc("GET /admin/websites/{id}/datenschutz/verzeichnis", adminHandler.ErrHandler(adminHandler.HandlePrivacyRecord))
+	adminProtectedMux.HandleFunc("GET /admin/websites/{id}/datenschutz/verzeichnis.json", adminHandler.ErrHandler(adminHandler.HandlePrivacyRecordJSON))
+	adminProtectedMux.HandleFunc("GET /admin/websites/{id}/datenschutz/verzeichnis/drucken", adminHandler.ErrHandler(adminHandler.HandlePrivacyRecordPrint))
 	// The account period is the installation's: it applies to the staff of
 	// every website, and a shorter one deletes accounts at the next run, so
 	// only an administrator sets it, with the password again (D-09).

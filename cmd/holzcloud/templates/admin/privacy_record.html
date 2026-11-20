@@ -1,0 +1,63 @@
+{{/*
+  Das Verzeichnis der Verarbeitungstätigkeiten einer Website (Phase 33.2,
+  DSR-05, D-02). Es wird bei jedem Aufruf aus dem erzeugt, was die Website
+  benutzt, aus den gewählten Rechtsrahmen und den Aufbewahrungsfristen
+  (dsr.BuildRecord); gespeichert wird nichts, darum gibt es hier nichts zu
+  bearbeiten. Was das CMS nicht wissen kann, steht als „auszufüllen" da. Die
+  Zellen sind schon übersetzt (in der Sprache des Betreibers), nur die
+  Überschriften laufen hier durch {{t}}.
+*/}}
+{{define "content"}}
+{{template "privacy_tabs" .}}
+{{template "privacy_record-content" .}}
+{{end}}
+
+{{define "privacy_record-content"}}
+<div class="card" style="margin-bottom: var(--space-3);">
+    <h2>{{t "Record of processing activities"}}</h2>
+    <p class="text-muted">{{t "Generated from what this website uses, the legal frameworks it follows and the retention periods it keeps. It changes when they change. Complete what is marked as to be filled in on the printed copy or in the JSON file."}}</p>
+    <p class="text-muted">{{tf "Generated on %s." .Generated}}</p>
+    <p>
+        <a href="{{.PrintURL}}" class="btn">{{t "Print"}}</a>
+        <a href="{{.JSONURL}}" class="btn" style="margin-left:var(--space-1)" download>{{t "Download as JSON"}}</a>
+    </p>
+</div>
+
+<section class="card" style="margin-bottom: var(--space-3);" id="record-controller">
+    <h2>{{t "Controller"}}</h2>
+    <dl class="detail-list">
+        {{range .Controller}}<dt>{{t .Label}}</dt><dd>{{.Value}}</dd>{{end}}
+    </dl>
+</section>
+
+{{range .Record.Activities}}
+<section class="card" style="margin-bottom: var(--space-3);" id="record-{{.ID}}">
+    <h2>{{.Name}}</h2>
+    <dl class="detail-list">
+        <dt>{{t "Purpose"}}</dt><dd style="white-space:pre-line">{{.Purpose}}</dd>
+        <dt>{{t "Data subjects"}}</dt><dd style="white-space:pre-line">{{.Subjects}}</dd>
+        <dt>{{t "Categories of data"}}</dt><dd style="white-space:pre-line">{{.Data}}</dd>
+        <dt>{{t "Legal basis"}}</dt><dd style="white-space:pre-line">{{.LegalBasis}}</dd>
+        <dt>{{t "Recipients"}}</dt><dd style="white-space:pre-line">{{.Recipients}}</dd>
+        <dt>{{t "Transfers abroad"}}</dt><dd style="white-space:pre-line">{{.Transfers}}</dd>
+        <dt>{{t "Retention"}}</dt><dd style="white-space:pre-line">{{.Retention}}</dd>
+    </dl>
+</section>
+{{end}}
+
+<section class="card" style="margin-bottom: var(--space-3);" id="record-security">
+    <h2>{{t "Security measures"}}</h2>
+    <ul>
+        {{range .Record.Security}}<li>{{.}}</li>{{end}}
+    </ul>
+</section>
+
+{{if .Record.Exemptions}}
+<section class="card" id="record-exemptions">
+    <h2>{{t "Exemptions"}}</h2>
+    <ul>
+        {{range .Record.Exemptions}}<li>{{.Text}}</li>{{end}}
+    </ul>
+</section>
+{{end}}
+{{end}}

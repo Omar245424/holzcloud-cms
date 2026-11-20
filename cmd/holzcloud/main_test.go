@@ -697,6 +697,12 @@ var editorOpenRoutes = []route{
 	// The retention periods are read by everybody with access to the
 	// website; changing one is decided by the handler (handlerDecidesRoutes).
 	{pattern: "GET /admin/websites/{id}/datenschutz/aufbewahrung"},
+	// The record of processing activities describes the website's settings
+	// and holds no person's data: read by everybody with access to the
+	// website (Phase 33.2, DSR-05).
+	{pattern: "GET /admin/websites/{id}/datenschutz/verzeichnis"},
+	{pattern: "GET /admin/websites/{id}/datenschutz/verzeichnis.json"},
+	{pattern: "GET /admin/websites/{id}/datenschutz/verzeichnis/drucken"},
 	// The result of an erasure: it shows what the person who erased left in
 	// their own session, once, and changes nothing (Phase 33.2, DSR-03).
 	{pattern: "GET /admin/websites/{id}/datenschutz/geloescht"},
