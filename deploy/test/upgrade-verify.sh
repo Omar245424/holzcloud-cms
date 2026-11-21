@@ -22,11 +22,12 @@
 # The bound files of the evidence set (BOUND_FILES below): deploy/DEPLOY.md,
 # deploy/backup.sh, deploy/restore.sh, deploy/holzcloud.service, deploy/test/run.sh,
 # deploy/test/Dockerfile, this file and the five plugin archives, together with the
-# binary built from the evidence commit (its source: cmd, internal, go.mod, go.sum).
-# The old release is bound by the commit sha of its tag, written into mig.txt
-# (tags never move). `run` refuses to start while a bound file differs from HEAD or
-# is untracked, and pins NEW_REF to the short sha of HEAD, so the binary and the
-# scripts are one commit.
+# binary built from the evidence commit (its source, BINARY_SOURCE: cmd, internal,
+# go.mod, go.sum, changelog.go and the CHANGELOG.md it embeds). The old release is
+# bound by the commit sha of its tag, written into mig.txt (tags never move). `run`
+# refuses to start while a bound file or the binary's source differs from HEAD or
+# is untracked, or the binary compiles a file outside BINARY_SOURCE, and pins
+# NEW_REF to the short sha of HEAD, so the binary and the scripts are one commit.
 #
 # Stages (STAGES, default "mig upd rb"; a subset is a rehearsal, and a stage left
 # out reads NOT-RUN, so a subset can never read all PASS):
@@ -99,6 +100,11 @@ RB_OUT=$BASE_OUT/amd64-t34-rb
 RUN_PREFIX=$BASE_OUT/amd64-t34-pass1
 EVIDENCE_FILE=$BASE_OUT/amd64-t34-evidence-commit.txt
 SUMMARY_FILE=$BASE_OUT/amd64-t34-summary.txt
+# Everything of this module that ./cmd/holzcloud compiles or embeds: the root
+# package is changelog.go, which embeds CHANGELOG.md. bound_check refuses a run
+# while it differs from HEAD or go list -deps names a file outside this list
+# (binary_uncovered).
+BINARY_SOURCE="cmd internal go.mod go.sum changelog.go CHANGELOG.md"
 BOUND_FILES="deploy/DEPLOY.md deploy/backup.sh deploy/restore.sh deploy/holzcloud.service deploy/test/run.sh deploy/test/Dockerfile deploy/test/upgrade-verify.sh plugins/bestellung/bestellung.zip plugins/jahreszahl/jahreszahl.zip plugins/kontaktformular/kontaktformular.zip plugins/nicht-gefunden/nicht-gefunden.zip plugins/suche/suche.zip"
 DEPLOY_DOC=deploy/DEPLOY.md
 # The document's manual backup line (DEPLOY.md, Backups), played by exact text.
@@ -692,7 +698,7 @@ put() {
 # bound_check: the bound files are tracked and equal to HEAD. Prints one line per
 # problem and fails when there is one.
 bound_check() {
-  local f bad=0
+  local f bad=0 unc
   for f in $BOUND_FILES; do
     if ! git ls-files --error-unmatch -- "$f" > /dev/null 2>&1; then
       say "upgrade-verify.sh: bound file $f is not tracked"
@@ -702,7 +708,47 @@ bound_check() {
       bad=1
     fi
   done
+  if ! git diff --quiet HEAD -- $BINARY_SOURCE || [ -n "$(git ls-files --others --exclude-standard -- $BINARY_SOURCE)" ]; then
+    say "upgrade-verify.sh: the binary's source ($BINARY_SOURCE) differs from HEAD"
+    bad=1
+  fi
+  if ! unc=$(binary_uncovered); then
+    say "upgrade-verify.sh: go list -deps ./cmd/holzcloud failed, so the binary's source cannot be bound"
+    bad=1
+  elif [ -n "$unc" ]; then
+    say "upgrade-verify.sh: the binary compiles or embeds files BINARY_SOURCE does not bind: $(printf '%s\n' "$unc" | tr '\n' ' ')"
+    bad=1
+  fi
   [ "$bad" -eq 0 ]
+}
+
+# binary_covered P: P (relative to the repository) is an entry of BINARY_SOURCE
+# or lies below one.
+binary_covered() {
+  local s
+  for s in $BINARY_SOURCE; do
+    case "${1:-}" in
+      "" | /*) return 1 ;;
+      "$s" | "$s"/*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# binary_uncovered: the files of this module that ./cmd/holzcloud compiles or
+# embeds (go list -deps) and BINARY_SOURCE does not cover, one per line; empty
+# when the list binds the whole binary. Fails when go list fails.
+binary_uncovered() {
+  local p here phys out
+  here=$(pwd)
+  phys=$(pwd -P)
+  out=$(go list -deps -f '{{if .Module}}{{if .Module.Main}}{{$d := .Dir}}{{range .GoFiles}}{{$d}}/{{.}}{{"\n"}}{{end}}{{range .EmbedFiles}}{{$d}}/{{.}}{{"\n"}}{{end}}{{end}}{{end}}' ./cmd/holzcloud) || return 1
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    p=${p#"$here"/}
+    p=${p#"$phys"/}
+    binary_covered "$p" || printf '%s\n' "$p"
+  done <<< "$out"
 }
 
 # Run INSIDE the container. STAMP_SH: $1 is the line to play, stdin the answer.
@@ -1919,8 +1965,8 @@ appendix_print() {
 #  - every `amd64-t34-.../FILE` token in backticks outside the appendix has a block
 #    (a file that is not pasted is named as "FILE in DIRECTORY");
 #  - exactly one line "Evidence commit: SHA"; SHA resolves, is the pinned commit of
-#    E/amd64-t34-evidence-commit.txt, and no bound file nor cmd, internal, go.mod or
-#    go.sum differs between SHA and HEAD;
+#    E/amd64-t34-evidence-commit.txt, and no bound file nor anything of
+#    BINARY_SOURCE differs between SHA and HEAD;
 #  - the pasted summary is not a rehearsal's, reads PASS for the record's own
 #    verdicts (record_verdicts) and for every other verdict of the run, and the
 #    pasted amd64-t34-pass1.status is exactly 0;
@@ -1996,7 +2042,7 @@ t34_record_check() {
         git diff --quiet "$sha" HEAD -- "$bf" || rc_bad "bound file $bf differs between $sha and HEAD"
       done
       n=$((n + 1))
-      git diff --quiet "$sha" HEAD -- cmd internal go.mod go.sum || rc_bad "cmd, internal, go.mod or go.sum differ between $sha and HEAD (the binary is not the one of the evidence)"
+      git diff --quiet "$sha" HEAD -- $BINARY_SOURCE || rc_bad "the binary's source ($BINARY_SOURCE) differs between $sha and HEAD (the binary is not the one of the evidence)"
     fi
   fi
   # The summary of a rehearsal is never evidence.
@@ -2830,6 +2876,24 @@ selftest_verdict_upd01() {
   st_ans "verdict_upd01: one removal, logged" PASS verdict_upd01 "$f"
 }
 
+# The binary's source is everything of this module that ./cmd/holzcloud compiles
+# or embeds: cmd, internal, go.mod, go.sum and the root package (changelog.go,
+# which embeds CHANGELOG.md). IN-01 of the phase 34 review.
+selftest_binary_source() {
+  local p
+  for p in cmd/holzcloud/main.go internal/db/db.go go.mod go.sum changelog.go CHANGELOG.md; do
+    st_ok "binary_covered: $p" binary_covered "$p"
+  done
+  for p in changelog.go.orig cmdx/main.go sdk/sdk.go plugins/suche/main.go tools/i18n/main.go README.md deploy/DEPLOY.md ""; do
+    st_fail "binary_covered: '$p'" binary_covered "$p"
+  done
+  if command -v go > /dev/null 2>&1; then
+    st_eq "binary_uncovered: this tree's binary is bound whole" "" "$(binary_uncovered 2>&1)"
+    st_eq "binary_uncovered: the list before the review misses the root package" "changelog.go CHANGELOG.md" \
+      "$(BINARY_SOURCE='cmd internal go.mod go.sum' binary_uncovered 2>&1 | tr '\n' ' ' | sed 's/ $//')"
+  fi
+}
+
 cmd_selftest() {
   ST_N=0
   ST_BAD=0
@@ -2852,6 +2916,7 @@ cmd_selftest() {
   selftest_verdict_upd02
   selftest_prune_expect
   selftest_verdict_upd01
+  selftest_binary_source
   if [ "$ST_BAD" -ne 0 ]; then
     echo "SELFTEST FAILED: $ST_BAD of $ST_N cases"
     exit 1

@@ -48,9 +48,11 @@
 #
 # The bound files of the evidence set (BOUND_FILES below): this file,
 # tools/totpcode/main.go and plugins/kontaktformular/kontaktformular.zip (the
-# archive the script uploads), together with the binary built from cmd, internal,
-# go.mod and go.sum of the evidence commit. `run` refuses to start while one of
-# them differs from HEAD or is untracked, and pins NEW_REF to the short sha of HEAD.
+# archive the script uploads), together with the binary built from BINARY_SOURCE
+# of the evidence commit (cmd, internal, go.mod, go.sum, changelog.go and the
+# CHANGELOG.md it embeds). `run` refuses to start while one of them differs from
+# HEAD or is untracked, or the binary compiles a file outside BINARY_SOURCE, and
+# pins NEW_REF to the short sha of HEAD.
 #
 # Environment:
 #   UAT_DIR     absolute, outside the repository (and outside the main checkout of a
@@ -94,7 +96,10 @@ T34_OUT=$BASE_OUT/mac-t34-uat
 RUN_PREFIX=$BASE_OUT/mac-t34-pass1
 EVIDENCE_FILE=$BASE_OUT/mac-t34-evidence-commit.txt
 BOUND_FILES="deploy/test/browser-verify.sh tools/totpcode/main.go plugins/kontaktformular/kontaktformular.zip"
-BINARY_SOURCE="cmd internal go.mod go.sum"
+# Everything of this module that ./cmd/holzcloud compiles or embeds: the root
+# package is changelog.go, which embeds CHANGELOG.md. bound_check refuses a run
+# while go list -deps names a file outside this list (binary_uncovered).
+BINARY_SOURCE="cmd internal go.mod go.sum changelog.go CHANGELOG.md"
 HTMX_JS=cmd/holzcloud/assets/htmx.min.js
 # What a run leaves in UAT_DIR, and the mark that says a run of this file made it.
 UAT_MARK=.browser-verify-t34
@@ -346,6 +351,35 @@ js_tracked_ok() {
   [ "$(git ls-files '*.js' '*.mjs' '*.cjs')" = "$HTMX_JS" ]
 }
 
+# binary_covered P: P (relative to the repository) is an entry of BINARY_SOURCE
+# or lies below one.
+binary_covered() {
+  local s
+  for s in $BINARY_SOURCE; do
+    case "${1:-}" in
+      "" | /*) return 1 ;;
+      "$s" | "$s"/*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# binary_uncovered: the files of this module that ./cmd/holzcloud compiles or
+# embeds (go list -deps) and BINARY_SOURCE does not cover, one per line; empty
+# when the list binds the whole binary. Fails when go list fails.
+binary_uncovered() {
+  local p here phys out
+  here=$(pwd)
+  phys=$(pwd -P)
+  out=$(go list -deps -f '{{if .Module}}{{if .Module.Main}}{{$d := .Dir}}{{range .GoFiles}}{{$d}}/{{.}}{{"\n"}}{{end}}{{range .EmbedFiles}}{{$d}}/{{.}}{{"\n"}}{{end}}{{end}}{{end}}' ./cmd/holzcloud) || return 1
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    p=${p#"$here"/}
+    p=${p#"$phys"/}
+    binary_covered "$p" || printf '%s\n' "$p"
+  done <<< "$out"
+}
+
 # safe_out PATH: a path directly below deploy/test/out whose name begins with mac-t34-.
 safe_out() {
   local p=${1:-} rest
@@ -367,7 +401,7 @@ safe_out() {
 # bound_check: the bound files are tracked and equal to HEAD. Prints one line per
 # problem and fails when there is one.
 bound_check() {
-  local f bad=0
+  local f bad=0 unc
   for f in $BOUND_FILES; do
     if ! git ls-files --error-unmatch -- "$f" > /dev/null 2>&1; then
       say "browser-verify.sh: bound file $f is not tracked"
@@ -378,7 +412,14 @@ bound_check() {
     fi
   done
   if ! git diff --quiet HEAD -- $BINARY_SOURCE || [ -n "$(git ls-files --others --exclude-standard -- $BINARY_SOURCE)" ]; then
-    say "browser-verify.sh: cmd, internal, go.mod or go.sum differ from HEAD"
+    say "browser-verify.sh: the binary's source ($BINARY_SOURCE) differs from HEAD"
+    bad=1
+  fi
+  if ! unc=$(binary_uncovered); then
+    say "browser-verify.sh: go list -deps ./cmd/holzcloud failed, so the binary's source cannot be bound"
+    bad=1
+  elif [ -n "$unc" ]; then
+    say "browser-verify.sh: the binary compiles or embeds files BINARY_SOURCE does not bind: $(printf '%s\n' "$unc" | tr '\n' ' ')"
     bad=1
   fi
   [ "$bad" -eq 0 ]
@@ -657,8 +698,8 @@ appendix_print() {
 #  - every `mac-t34-...` token in backticks outside the appendix is the directory
 #    mac-t34-uat, has a block, or stands on its line as "`TOKEN` (not pasted)";
 #  - exactly one line "Evidence commit: SHA"; SHA resolves, is the pinned commit of
-#    E/mac-t34-evidence-commit.txt, and no bound file nor cmd, internal, go.mod or
-#    go.sum differs between SHA and HEAD;
+#    E/mac-t34-evidence-commit.txt, and no bound file nor anything of
+#    BINARY_SOURCE differs between SHA and HEAD;
 #  - the tracked JavaScript is exactly the htmx file;
 #  - the pasted summary is not a rehearsal's and reads UAT-01, UAT-02 and UAT-03
 #    PASS, and the pasted mac-t34-pass1.status is exactly 0;
@@ -733,7 +774,7 @@ t34_record_check() {
         git diff --quiet "$sha" HEAD -- "$bf" || rc_bad "bound file $bf differs between $sha and HEAD"
       done
       n=$((n + 1))
-      git diff --quiet "$sha" HEAD -- $BINARY_SOURCE || rc_bad "cmd, internal, go.mod or go.sum differ between $sha and HEAD (the binary is not the one of the evidence)"
+      git diff --quiet "$sha" HEAD -- $BINARY_SOURCE || rc_bad "the binary's source ($BINARY_SOURCE) differs between $sha and HEAD (the binary is not the one of the evidence)"
     fi
   fi
   # No JavaScript beyond htmx entered the tree.
@@ -1216,6 +1257,24 @@ selftest_appendix() {
   st_eq "appendix: a file of the list is missing" 1 "$(rc_of appendix_print "$e")"
 }
 
+# The binary's source is everything of this module that ./cmd/holzcloud compiles
+# or embeds: cmd, internal, go.mod, go.sum and the root package (changelog.go,
+# which embeds CHANGELOG.md). IN-01 of the phase 34 review.
+selftest_binary_source() {
+  local p
+  for p in cmd/holzcloud/main.go internal/db/db.go go.mod go.sum changelog.go CHANGELOG.md; do
+    st_ok "binary_covered: $p" binary_covered "$p"
+  done
+  for p in changelog.go.orig cmdx/main.go sdk/sdk.go plugins/suche/main.go tools/totpcode/main.go README.md ""; do
+    st_fail "binary_covered: '$p'" binary_covered "$p"
+  done
+  if command -v go > /dev/null 2>&1; then
+    st_eq "binary_uncovered: this tree's binary is bound whole" "" "$(binary_uncovered 2>&1)"
+    st_eq "binary_uncovered: the list before the review misses the root package" "changelog.go CHANGELOG.md" \
+      "$(BINARY_SOURCE='cmd internal go.mod go.sum' binary_uncovered 2>&1 | tr '\n' ' ' | sed 's/ $//')"
+  fi
+}
+
 cmd_selftest() {
   local t=${TMPDIR:-/tmp}
   ST_N=0
@@ -1231,6 +1290,7 @@ cmd_selftest() {
   selftest_verdict_uat03
   selftest_record
   selftest_appendix
+  selftest_binary_source
   if [ "$ST_BAD" -ne 0 ]; then
     echo "SELFTEST FAILED: $ST_BAD of $ST_N cases"
     exit 1
