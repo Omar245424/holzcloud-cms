@@ -36,8 +36,21 @@
 #         second container that runs this tree (level 69); the levels read from
 #         the database files, the journal of the first start, the 17 checks of
 #         run.sh check on the target (MIG-01, MIG-02)
-#   upd   added by plan 34-04 (UPD-01)
-#   rb    added by plan 34-04 (UPD-02)
+#   upd   this tree installed and seeded, then six migrating updates on its data
+#         directory, each the document's Updating blocks played line by line to a
+#         synthetic build of this tree with one more no-op migration than the last
+#         (made in a scratch clone, never committed); after each, the snapshot set
+#         against the newest five, every removal logged (UPD-01)
+#   rb    this tree (B0) installed and seeded, then an update to a synthetic build F
+#         whose first added migration succeeds and whose second fails; the restart
+#         loop to its end without reset-failed (one snapshot written, kept by every
+#         restart, named by every "restore with:" line), the previous binary refused
+#         on the half-migrated database by the schema guard (SCENARIO[previous-on-half]),
+#         Rolling back block 1 played as written, the state before equal to the
+#         state after (UPD-02)
+#
+# Every line the stages upd and rb play is read out of the fenced bash blocks of
+# deploy/DEPLOY.md (doc_block); a line play_kind cannot translate ends the stage.
 #
 # Environment:
 #   PLATFORM    must be linux/amd64 (on this arm64 Mac it runs under emulation)
