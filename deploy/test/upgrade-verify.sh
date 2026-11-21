@@ -501,6 +501,94 @@ verdict_upd02() {
   echo FAIL
 }
 
+# snap_stamp NAME: the UTC stamp at the end of a snapshot's name
+# (pre-upgrade-VERSION-YYYYMMDD-HHMMSS.sqlite); 00000000-000000 for a name without
+# one, which sorts it as the oldest, as internal/db PruneSnapshots does.
+snap_stamp() {
+  case "${1:-}" in
+    *-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9].sqlite)
+      printf '%s\n' "$1" | sed 's/.*-\([0-9]\{8\}-[0-9]\{6\}\)\.sqlite$/\1/'
+      ;;
+    *) echo 00000000-000000 ;;
+  esac
+}
+
+# by_stamp NAMES: the names oldest first by their stamp, then by name (the order
+# PruneSnapshots sorts in: by time, never by the version string), one line,
+# separated by spaces.
+by_stamp() {
+  local s
+  for s in ${1:-}; do
+    printf '%s %s\n' "$(snap_stamp "$s")" "$s"
+  done | LC_ALL=C sort -k1,1 -k2,2 | awk '{ printf "%s%s", (NR > 1 ? " " : ""), $2 } END { print "" }'
+}
+
+# prune_expect INITIAL WRITTEN K: the snapshots the data directory holds after the
+# Kth update, when it held INITIAL before the first and the updates wrote WRITTEN
+# (in order): the newest five of INITIAL and the first K of WRITTEN by stamp,
+# oldest first, on one line. Fails when WRITTEN names fewer than K, or K is no
+# number above zero.
+prune_expect() {
+  local init=${1:-} written=${2:-} k=${3:-} all w i=0
+  is_count "$k" || return 1
+  [ "$k" -gt 0 ] || return 1
+  all=$init
+  for w in $written; do
+    [ "$i" -lt "$k" ] || break
+    i=$((i + 1))
+    all="$all $w"
+  done
+  [ "$i" -eq "$k" ] || return 1
+  by_stamp "$all" | tr ' ' '\n' | grep . | tail -n 5 | tr '\n' ' ' | sed 's/ $//'
+  echo
+}
+
+# removed_between BEFORE AFTER: the names of BEFORE that AFTER no longer holds, in
+# the order of BEFORE, on one line.
+removed_between() {
+  local s out=""
+  for s in ${1:-}; do
+    case " ${2:-} " in
+      *" $s "*) ;;
+      *) out="$out $s" ;;
+    esac
+  done
+  printf '%s\n' "${out# }"
+}
+
+# verdict_upd01 FILE: PASS, FAIL or NOT-RUN (no file) for the key lines of upd.txt:
+# six updates, each with a written snapshot, each served by its own build
+# (READYZ-k is the version of BUILD-k), each at the level the migration count
+# gives (LEVEL-EXPECTED-B0 plus k), each leaving exactly the newest five
+# (MATCH-k yes); at least one snapshot removed, and every removal logged.
+verdict_upd01() {
+  local f=${1:-} b0 k
+  if [ ! -f "$f" ]; then
+    echo NOT-RUN
+    return 0
+  fi
+  kv_num "$f" LEVEL-EXPECTED-B0 || {
+    echo FAIL
+    return 0
+  }
+  b0=$(kv "$f" LEVEL-EXPECTED-B0)
+  for k in 1 2 3 4 5 6; do
+    if ! kv_is "$f" "MATCH-$k" yes || [ "$(kv_count "$f" "BUILD-$k")" != 1 ] || [ "$(kv_count "$f" "READYZ-$k")" != 1 ] \
+      || [ -z "$(kv "$f" "READYZ-$k")" ] || [ "$(kv "$f" "READYZ-$k")" != "$(kv "$f" "BUILD-$k" | awk '{ print $1 }')" ] \
+      || [ "$(kv_count "$f" "WRITTEN-$k")" != 1 ] \
+      || ! case "$(kv "$f" "WRITTEN-$k")" in pre-upgrade-*.sqlite) true ;; *) false ;; esac \
+      || ! kv_level "$f" "LEVEL-AFTER-$k" "$((b0 + k))"; then
+      echo FAIL
+      return 0
+    fi
+  done
+  if kv_num "$f" REMOVALS-TOTAL && [ "$(kv "$f" REMOVALS-TOTAL)" -ge 1 ] && kv_same "$f" REMOVALS-LOGGED REMOVALS-TOTAL; then
+    echo PASS
+  else
+    echo FAIL
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # The containers. Every docker call names a container that safe_name has
 # accepted, and every run.sh call a directory that safe_out has accepted.
@@ -1286,7 +1374,7 @@ rb_loop() {
   put "$f" JOURNAL-RESTORE-WITH "$(grep -c '"msg":"restore with: ' "$j" || true)"
   paths=$(restore_with_paths "$j")
   put "$f" RESTORE-WITH-DISTINCT-PATHS "$(printf '%s\n' "$paths" | grep -c . || true)"
-  wl=$(grep '"msg":"pre-upgrade snapshot written"' "$j" | head -n 1)
+  wl=$(grep '"msg":"pre-upgrade snapshot written"' "$j" | head -n 1) || wl=""
   if [ -n "$paths" ] && [ "$paths" = "$(json_str "$wl" path)" ]; then
     put "$f" RESTORE-WITH-NAMES-WRITTEN yes
   else
@@ -1328,7 +1416,7 @@ rb_guard() {
   put "$f" GUARD-ACTIVE-STATE "$WF_STATE"
   g=$d/rb-guard.txt
   dxc "$RB_NAME" journalctl -u holzcloud --since "@$t1" -o cat --no-pager | tr -d '\r' > "$g" || true
-  gl=$(grep '"msg":"refusing to start: the database schema is newer than this binary"' "$g" | head -n 1)
+  gl=$(grep '"msg":"refusing to start: the database schema is newer than this binary"' "$g" | head -n 1) || gl=""
   put "$f" GUARD-STARTS "$(grep -c '"msg":"refusing to start: the database schema is newer than this binary"' "$g" || true)"
   if [ -n "$gl" ]; then put "$f" GUARD-LINE yes; else put "$f" GUARD-LINE no; fi
   put "$f" GUARD-DB-LEVEL "$(json_num "$gl" db_level)"
@@ -1386,6 +1474,111 @@ stage_rb() {
   rb_guard "$f"
   rb_rollback "$f"
   printf 'UPD-02 %s\n' "$(verdict_upd02 "$f")" >> "$f"
+}
+
+# ---------------------------------------------------------------------------
+# Stage upd: six migrating updates on one data directory, the pruning of the
+# pre-upgrade snapshots to the newest five.
+# ---------------------------------------------------------------------------
+
+# syn_build_upd DIR: six builds in one scratch clone, build k carrying the no-op
+# migrations 1 to k (each after its own commit, so each build's version differs);
+# the binaries are DIR/syn/holzcloud-syn-K, listed in DIR/upd-builds.txt.
+syn_build_upd() {
+  local d=$1 b0 k
+  b0=$(migrations_at "$NEW_REF")
+  mkdir -p "$d/syn"
+  (
+    set -e
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/t34-syn-upd.XXXXXX")
+    trap 'rm -rf "${tmp:?}"' EXIT
+    syn_clone "$tmp"
+    for k in 1 2 3 4 5 6; do
+      syn_migration "$tmp" "$((b0 + k))" "t34_noop_$k" "CREATE TABLE t34_noop_$k (id INTEGER PRIMARY KEY) STRICT;"
+      syn_commit_build "$tmp" "$d/syn/holzcloud-syn-$k" "t34: synthetic build $k, the no-op migrations 1 to $k"
+    done
+  ) || die "upd: the synthetic builds failed"
+  {
+    echo "six synthetic builds of $NEW_REF ($(git describe --tags --always "$NEW_REF")), made in a scratch clone and deleted with it; build k adds the no-op migrations $(printf '%05d' $((b0 + 1))) to $(printf '%05d' $((b0 + 6))) up to the kth:"
+    for k in 1 2 3 4 5 6; do
+      echo "build $k: version $(info_of "$d/syn/holzcloud-syn-$k" version) commit $(info_of "$d/syn/holzcloud-syn-$k" commit) migrations $(info_of "$d/syn/holzcloud-syn-$k" migrations) sha256 $(info_of "$d/syn/holzcloud-syn-$k" sha256)"
+    done
+  } > "$d/upd-builds.txt"
+}
+
+# upd_snapshot_block TITLE NAMES: a block of upd-snapshots.txt, each name (oldest
+# first) with its level.
+upd_snapshot_block() {
+  local s
+  {
+    echo "$1"
+    for s in $2; do
+      echo "  $s level $(level_file "$UPD_NAME" "/opt/holzcloud/data/$s")"
+    done
+  } >> "$UPD_OUT/upd-snapshots.txt"
+}
+
+stage_upd() {
+  local f=$UPD_OUT/upd.txt d=$UPD_OUT b0 k b bin init now prev written="" w exp j left rj s total=0 logged=0
+  run_sh "$UPD_NAME" "$UPD_OUT" build up install postinstall
+  : > "$f"
+  DEV_FILE=$UPD_OUT/deviations-driver.lst
+  : > "$DEV_FILE"
+  stage_zips "$UPD_NAME"
+  run_sh "$UPD_NAME" "$UPD_OUT" seed || die "upd: run.sh seed failed"
+  b0=$(migrations_at "$NEW_REF")
+  put "$f" LEVEL-EXPECTED-B0 "$b0"
+  init=$(by_stamp "$(snapshot_names "$UPD_NAME" | tr '\n' ' ')")
+  put "$f" SNAPSHOTS-AFTER-0 "$init"
+  : > "$d/upd-snapshots.txt"
+  upd_snapshot_block "after the install and run.sh seed ($(dxc "$UPD_NAME" /opt/holzcloud/holzcloud version | head -n 1 | tr -d '\r')), oldest first:" "$init"
+
+  syn_build_upd "$d"
+  deviation "DEVIATION[synthetic-build]: the six binaries of the updates are throwaway builds of this tree, build k with the no-op migrations $(printf '%05d' $((b0 + 1)))_t34_noop_1.sql to $(printf '%05d' $((b0 + 6)))_t34_noop_6.sql up to the kth (each creates one empty table), made in one scratch clone with one local commit per build (so that each build's version differs) and the Build line of the document, the clone deleted afterwards; nothing of it is committed or pushed. The Build line of Updating block 2 is skipped for them. Released binaries alone never prune: of the tags only 0.1.2 to 0.1.3 migrates, so they give no five updates that each write a snapshot"
+  deviation "DEVIATION[start-limit]: systemctl reset-failed holzcloud runs before each of the six updates: six updates within minutes, each with a stop and a start, meet StartLimitBurst (five starts in 300 seconds), which updates days apart never do"
+
+  prev=$init
+  for k in 1 2 3 4 5 6; do
+    bin=$d/syn/holzcloud-syn-$k
+    put "$f" "BUILD-$k" "$(info_of "$bin" version) ($(info_of "$bin" commit)) migrations $(info_of "$bin" migrations)"
+    dxc "$UPD_NAME" systemctl reset-failed holzcloud > /dev/null 2>&1 || true
+    t0=$(dxc "$UPD_NAME" date +%s | tr -d '\r')
+    : > "$d/upd-$k.out"
+    for b in 1 2 3; do
+      play_block "$UPD_NAME" "$d/upd-$k.out" "upd-$k" Updating "$b" "$bin"
+    done
+    put "$f" "READYZ-$k" "$(dxc "$UPD_NAME" bash -c 'curl -fsS --max-time 5 http://127.0.0.1:8080/readyz | jq -r .version' | tr -d '\r')"
+    j=$d/upd-$k-journal.lst
+    dxc "$UPD_NAME" journalctl -u holzcloud --since "@$t0" -o cat --no-pager | tr -d '\r' > "$j" || true
+    w=$(json_str "$(grep '"msg":"pre-upgrade snapshot written"' "$j" | head -n 1)" path)
+    w=${w##*/}
+    put "$f" "WRITTEN-$k" "$w"
+    rj=$({ grep '"msg":"removed old pre-upgrade snapshot"' "$j" || true; } | while IFS= read -r s; do
+      s=$(json_str "$s" path)
+      printf '%s ' "${s##*/}"
+    done | sed 's/ $//')
+    put "$f" "REMOVED-$k" "${rj:-none}"
+    now=$(by_stamp "$(snapshot_names "$UPD_NAME" | tr '\n' ' ')")
+    put "$f" "SNAPSHOTS-AFTER-$k" "$now"
+    written="${written:+$written }$w"
+    exp=$(prune_expect "$init" "$written" "$k") || exp="?"
+    put "$f" "EXPECTED-$k" "$exp"
+    if [ -n "$w" ] && [ "$now" = "$exp" ]; then put "$f" "MATCH-$k" yes; else put "$f" "MATCH-$k" no; fi
+    left=$(removed_between "$prev" "$now")
+    put "$f" "LEFT-$k" "${left:-none}"
+    for s in $left; do
+      total=$((total + 1))
+      case " $rj " in
+        *" $s "*) logged=$((logged + 1)) ;;
+      esac
+    done
+    put "$f" "LEVEL-AFTER-$k" "$(level_live "$UPD_NAME")"
+    upd_snapshot_block "after update $k ($(info_of "$bin" version)), oldest first:" "$now"
+    prev=$now
+  done
+  put "$f" REMOVALS-TOTAL "$total"
+  put "$f" REMOVALS-LOGGED "$logged"
+  printf 'UPD-01 %s\n' "$(verdict_upd01 "$f")" >> "$f"
 }
 
 # scenario TEXT: a step the driver takes that the document must not contain, in
@@ -1459,6 +1652,9 @@ write_summary() {
     m1=$(verdict_mig01 "$MIG_SRC_OUT/mig.txt")
     m2=$(verdict_mig02 "$MIG_SRC_OUT/mig.txt")
   fi
+  if stage_wanted upd; then
+    u1=$(verdict_upd01 "$UPD_OUT/upd.txt")
+  fi
   if stage_wanted rb; then
     u2=$(verdict_upd02 "$RB_OUT/rb.txt")
   fi
@@ -1488,6 +1684,12 @@ run_body() {
     mig_versions
     mig_deviations
   fi
+  if stage_wanted upd; then
+    stage_upd
+    stage_versions "$UPD_OUT" "$UPD_NAME" "$UPD_OUT/syn/holzcloud-syn-1" "$UPD_OUT/syn/holzcloud-syn-2" \
+      "$UPD_OUT/syn/holzcloud-syn-3" "$UPD_OUT/syn/holzcloud-syn-4" "$UPD_OUT/syn/holzcloud-syn-5" "$UPD_OUT/syn/holzcloud-syn-6"
+    stage_deviations "$UPD_OUT"
+  fi
   if stage_wanted rb; then
     stage_rb
     stage_versions "$RB_OUT" "$RB_NAME" "$RB_OUT/syn/holzcloud-f"
@@ -1504,10 +1706,6 @@ cmd_run() {
     say "upgrade-verify.sh: STAGES '$STAGES' must name mig, upd or rb"
     exit 2
   }
-  if stage_wanted upd; then
-    say "upgrade-verify.sh: the stage upd is added by plan 34-04, task 2; run STAGES='mig rb' until then"
-    exit 2
-  fi
   [ "$PLATFORM" = linux/amd64 ] || {
     say "upgrade-verify.sh: PLATFORM must be linux/amd64 (got '$PLATFORM')"
     exit 2
@@ -2398,6 +2596,96 @@ selftest_verdict_upd02() {
   st_ans "verdict_upd02: levels 67 and 69, a typed 69 for the binary" FAIL verdict_upd02 "$f"
 }
 
+selftest_prune_expect() {
+  local e0=pre-upgrade-v0.1.4-245-ga44208a-20261121-120000.sqlite w k exp
+  local a1=pre-upgrade-v0.1.4-246-g1111111-20261121-120100.sqlite
+  local a2=pre-upgrade-v0.1.4-247-g2222222-20261121-120200.sqlite
+  local a3=pre-upgrade-v0.1.4-248-g3333333-20261121-120300.sqlite
+  local a4=pre-upgrade-v0.1.4-249-g4444444-20261121-120400.sqlite
+  local a5=pre-upgrade-v0.1.4-250-g5555555-20261121-120500.sqlite
+  local a6=pre-upgrade-v0.1.4-251-g6666666-20261121-120600.sqlite
+  w="$a1 $a2 $a3 $a4 $a5 $a6"
+  # One initial file (the first start of the install), the table of 34-RESEARCH.md Pattern 3.
+  st_ans "prune_expect: one initial, K=1" "$e0 $a1" prune_expect "$e0" "$w" 1
+  st_ans "prune_expect: one initial, K=2" "$e0 $a1 $a2" prune_expect "$e0" "$w" 2
+  st_ans "prune_expect: one initial, K=3" "$e0 $a1 $a2 $a3" prune_expect "$e0" "$w" 3
+  st_ans "prune_expect: one initial, K=4" "$e0 $a1 $a2 $a3 $a4" prune_expect "$e0" "$w" 4
+  st_ans "prune_expect: one initial, K=5, the initial one removed" "$a1 $a2 $a3 $a4 $a5" prune_expect "$e0" "$w" 5
+  st_ans "prune_expect: one initial, K=6, the first update's removed" "$a2 $a3 $a4 $a5 $a6" prune_expect "$e0" "$w" 6
+  # No initial file.
+  st_ans "prune_expect: none initial, K=1" "$a1" prune_expect "" "$w" 1
+  st_ans "prune_expect: none initial, K=5" "$a1 $a2 $a3 $a4 $a5" prune_expect "" "$w" 5
+  st_ans "prune_expect: none initial, K=6" "$a2 $a3 $a4 $a5 $a6" prune_expect "" "$w" 6
+  # Two initial files, given in name order, not in time order.
+  local e1=pre-upgrade-dev-20261121-115900.sqlite
+  st_ans "prune_expect: two initial, K=1, by time" "$e1 $e0 $a1" prune_expect "$e0 $e1" "$w" 1
+  st_ans "prune_expect: two initial, K=3" "$e1 $e0 $a1 $a2 $a3" prune_expect "$e1 $e0" "$w" 3
+  st_ans "prune_expect: two initial, K=4, the older initial removed" "$e0 $a1 $a2 $a3 $a4" prune_expect "$e1 $e0" "$w" 4
+  st_ans "prune_expect: two initial, K=5" "$a1 $a2 $a3 $a4 $a5" prune_expect "$e1 $e0" "$w" 5
+  st_ans "prune_expect: two initial, K=6" "$a2 $a3 $a4 $a5 $a6" prune_expect "$e1 $e0" "$w" 6
+  # Version strings that sort against their time: v0.1.10 is written after v0.1.9.
+  local v9=pre-upgrade-v0.1.9-20261121-130000.sqlite v10=pre-upgrade-v0.1.10-20261121-130100.sqlite
+  st_ans "prune_expect: v0.1.10 after v0.1.9 by time, not before by name" "$a3 $a4 $a5 $v9 $v10" \
+    prune_expect "$a1 $a2 $a3 $a4 $a5" "$v9 $v10" 2
+  st_ans "by_stamp: v0.1.10 written after v0.1.9" "$v9 $v10" by_stamp "$v10 $v9"
+  st_ans "by_stamp: a name without a stamp is the oldest" "pre-upgrade-x.sqlite $a1" by_stamp "$a1 pre-upgrade-x.sqlite"
+  st_ans "by_stamp: none" "" by_stamp ""
+  st_ans "snap_stamp: a name" 20261121-120100 snap_stamp "$a1"
+  st_ans "snap_stamp: no stamp" 00000000-000000 snap_stamp pre-upgrade-x.sqlite
+  st_ans "prune_expect: fewer written than K" ERROR prune_expect "$e0" "$a1 $a2" 3
+  st_ans "prune_expect: K=0" ERROR prune_expect "$e0" "$w" 0
+  st_ans "prune_expect: K=x" ERROR prune_expect "$e0" "$w" x
+  st_ans "removed_between: one left" "$e0" removed_between "$e0 $a1 $a2 $a3 $a4" "$a1 $a2 $a3 $a4 $a5"
+  st_ans "removed_between: none left" "" removed_between "$e0 $a1" "$e0 $a1 $a2"
+  st_ans "removed_between: two left, in the order before" "$e1 $e0" removed_between "$e1 $e0 $a1" "$a1 $a2"
+  st_ans "removed_between: a name that is a prefix of another is not found in it" "$a1" removed_between "$a1" "$a1.x"
+}
+
+# fx_upd FILE [KEY VALUE]: every key of upd.txt, all good; with KEY and VALUE, that
+# one line replaced (or removed for "-").
+fx_upd() {
+  local f=$1 k
+  {
+    echo "LEVEL-EXPECTED-B0: 69"
+    echo "SNAPSHOTS-AFTER-0: e0"
+    for k in 1 2 3 4 5 6; do
+      echo "BUILD-$k: v0.1.4-24$k-g$k$k$k$k$k$k$k ($k$k$k$k$k$k$k) migrations $((69 + k))"
+      echo "READYZ-$k: v0.1.4-24$k-g$k$k$k$k$k$k$k"
+      echo "WRITTEN-$k: pre-upgrade-v0.1.4-24$k-g$k$k$k$k$k$k$k-20261121-12000$k.sqlite"
+      echo "REMOVED-$k: "
+      echo "SNAPSHOTS-AFTER-$k: x"
+      echo "EXPECTED-$k: x"
+      echo "MATCH-$k: yes"
+      echo "LEVEL-AFTER-$k: $((69 + k))"
+    done
+    echo "REMOVALS-TOTAL: 2"
+    echo "REMOVALS-LOGGED: 2"
+  } > "$f"
+  if [ -n "${2:-}" ]; then fx_set "$f" "$2" "${3:-}"; fi
+}
+
+selftest_verdict_upd01() {
+  local f=$ST_TMP/upd.txt kv
+  st_ans "verdict_upd01: no file" NOT-RUN verdict_upd01 "$ST_TMP/absent.txt"
+  fx_upd "$f"
+  st_ans "verdict_upd01: every key good" PASS verdict_upd01 "$f"
+  for kv in "LEVEL-EXPECTED-B0|-" "LEVEL-EXPECTED-B0|x" "LEVEL-EXPECTED-B0|68" \
+    "MATCH-1|no" "MATCH-3|-" "MATCH-6|no" "MATCH-6|" \
+    "READYZ-2|v0.1.4-241-g1111111" "READYZ-2|" "READYZ-4|-" "BUILD-5|-" \
+    "WRITTEN-1|" "WRITTEN-1|-" "WRITTEN-6|holzcloud.sqlite" \
+    "LEVEL-AFTER-6|74" "LEVEL-AFTER-6|76" "LEVEL-AFTER-6|-" "LEVEL-AFTER-1|69" \
+    "REMOVALS-TOTAL|0" "REMOVALS-TOTAL|-" "REMOVALS-LOGGED|1" "REMOVALS-LOGGED|-"; do
+    fx_upd "$f" "${kv%%|*}" "${kv#*|}"
+    st_ans "verdict_upd01: ${kv%%|*} '${kv#*|}'" FAIL verdict_upd01 "$f"
+  done
+  fx_upd "$f"
+  echo "MATCH-2: yes" >> "$f"
+  st_ans "verdict_upd01: a key twice" FAIL verdict_upd01 "$f"
+  fx_upd "$f" REMOVALS-TOTAL 1
+  fx_set "$f" REMOVALS-LOGGED 1
+  st_ans "verdict_upd01: one removal, logged" PASS verdict_upd01 "$f"
+}
+
 cmd_selftest() {
   ST_N=0
   ST_BAD=0
@@ -2418,6 +2706,8 @@ cmd_selftest() {
   selftest_guard_sentence
   selftest_compare_state
   selftest_verdict_upd02
+  selftest_prune_expect
+  selftest_verdict_upd01
   if [ "$ST_BAD" -ne 0 ]; then
     echo "SELFTEST FAILED: $ST_BAD of $ST_N cases"
     exit 1
