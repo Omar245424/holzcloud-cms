@@ -196,19 +196,82 @@ kv_same() {
   kv_num "$1" "$2" && kv_num "$1" "$3" && [ "$(kv "$1" "$2")" -eq "$(kv "$1" "$3")" ]
 }
 
-# verdict_mig01 FILE: PASS, FAIL or NOT-RUN (no file) for the key lines of mig.txt.
+# kv_login FILE KEY: the key occurs once and is a login the server accepted: a 303
+# to /admin/, or to the compulsory two-factor enrolment an administrator without a
+# second factor is sent to from 0.1.5 on.
+kv_login() {
+  [ "$(kv_count "$1" "$2")" = 1 ] || return 1
+  case "$(kv "$1" "$2")" in
+    "303 /admin/" | "303 /admin/2fa/einrichten") return 0 ;;
+  esac
+  return 1
+}
+
+# applied_versions FILE: the `version` values of the "migration applied" lines of
+# a journal of JSON lines, in their order, on one line separated by spaces; empty
+# for none, a failure for no file.
+applied_versions() {
+  [ -f "${1:-}" ] || return 1
+  sed -n 's/^{.*"msg":"migration applied".*"version":\([0-9][0-9]*\)[,}].*/\1/p' "$1" | tr '\n' ' ' | sed 's/ $//'
+}
+
+# consecutive FROM TO: the numbers FROM+1 to TO on one line separated by spaces.
+consecutive() {
+  local i=$(($1 + 1)) out=""
+  while [ "$i" -le "$2" ]; do
+    out="$out $i"
+    i=$((i + 1))
+  done
+  printf '%s\n' "${out# }"
+}
+
+# verdict_mig01 FILE: PASS, FAIL or NOT-RUN (no file) for the key lines of mig.txt:
+# the restore succeeded, both levels are the ones the migration files of the two
+# commits give, the restored installation answers (setup closed, the old login
+# accepted, the page, the same media file, 17 of 17 checks) and the first start
+# left exactly one snapshot, at the level the backup had.
 verdict_mig01() {
   local f=${1:-}
   if [ ! -f "$f" ]; then
     echo NOT-RUN
     return 0
   fi
-  if kv_is "$f" RESTORE-RC 0 && kv_same "$f" LEVEL-BEFORE LEVEL-EXPECTED-BEFORE \
-    && kv_same "$f" LEVEL-AFTER LEVEL-EXPECTED-AFTER; then
+  if kv_is "$f" RESTORE-RC 0 && kv_is "$f" RESTORE-COMPLETE yes \
+    && kv_same "$f" LEVEL-BEFORE LEVEL-EXPECTED-BEFORE && kv_same "$f" LEVEL-AFTER LEVEL-EXPECTED-AFTER \
+    && kv_is "$f" CHECK "17 of 17" && kv_is "$f" SETUP-AFTER 404 && kv_login "$f" LOGIN-AFTER \
+    && kv_is "$f" PAGE-AFTER 200 && kv_is "$f" MEDIA-SHA-EQUAL yes \
+    && kv_is "$f" SNAPSHOTS-AFTER 1 && kv_same "$f" SNAPSHOT-LEVEL LEVEL-BEFORE; then
     echo PASS
   else
     echo FAIL
   fi
+}
+
+# verdict_mig02 FILE: PASS when mig.txt names both releases with their commits
+# (and the backup's MANIFEST the old one), both levels with the later one above,
+# what restore.sh printed (the notice about the missing checksum file, the end
+# line), one snapshot line of the first start and one "migration applied" line
+# for every level between, in order.
+verdict_mig02() {
+  local f=${1:-} b a
+  if [ ! -f "$f" ]; then
+    echo NOT-RUN
+    return 0
+  fi
+  if [ "$(kv_count "$f" OLD-RELEASE)" = 1 ] && printf '%s\n' "$(kv "$f" OLD-RELEASE)" | grep -Eqx 'v0\.1\.1 \([0-9a-f]{7,40}\)' \
+    && [ "$(kv_count "$f" NEW-RELEASE)" = 1 ] && printf '%s\n' "$(kv "$f" NEW-RELEASE)" | grep -Eqx '[^ ]+ \([0-9a-f]{7,40}\)' \
+    && [ "$(kv_count "$f" MANIFEST-VERSION)" = 1 ] && printf '%s\n' "$(kv "$f" MANIFEST-VERSION)" | grep -Eq '(^| )v0\.1\.1( |$)' \
+    && kv_num "$f" LEVEL-BEFORE && kv_num "$f" LEVEL-AFTER \
+    && kv_is "$f" RESTORE-NOTICE yes && kv_is "$f" RESTORE-COMPLETE yes && kv_is "$f" JOURNAL-SNAPSHOT-LINES 1; then
+    b=$(kv "$f" LEVEL-BEFORE)
+    a=$(kv "$f" LEVEL-AFTER)
+    if [ "$a" -gt "$b" ] && kv_is "$f" JOURNAL-APPLIED-LINES "$((a - b))" \
+      && kv_is "$f" JOURNAL-APPLIED-VERSIONS "$(consecutive "$b" "$a")"; then
+      echo PASS
+      return 0
+    fi
+  fi
+  echo FAIL
 }
 
 # ---------------------------------------------------------------------------
@@ -335,6 +398,82 @@ level_live() {
   level_of_output "$out" || echo "?"
 }
 
+# Runs INSIDE the container (docker exec -i NAME bash -s -- ARGS...); the shell
+# text is on stdin. run.sh's First Run technique, this file's own copy (run.sh
+# keeps its FORM_SH to itself):
+#   get   PATH JAR                  GET with the cookie jar
+#   login PATH EMAIL PASSFILE JAR   GET the form into JAR, take the hidden CSRF
+#                                   field, POST email and password
+# The jar is created under umask 077. The password is read from PASSFILE, a
+# root-only file in the container, and neither it nor the token nor a cookie is
+# ever printed: the only output is one line "HTTP STATUS REDIRECT-PATH". The unit
+# sets HOLZCLOUD_SECURE=true, so a form over plain http is only accepted with a
+# Referer that carries the https origin (DEVIATION[browser]).
+read -r -d '' FORM_SH << 'FORM_EOF' || true
+set -eu
+umask 077
+base=http://127.0.0.1:8080
+mode=$1
+path=$2
+case "$mode" in
+  get)
+    jar=$3
+    res=$(curl -s -o /dev/null --max-time 60 -w '%{http_code} %{redirect_url}' -c "$jar" -b "$jar" "$base$path")
+    ;;
+  login)
+    email=$3
+    passfile=$4
+    jar=$5
+    page=$(curl -s --max-time 60 -c "$jar" -b "$jar" "$base$path")
+    tok=$(printf '%s' "$page" | grep -o 'name="gorilla.csrf.Token" value="[^"]*"' | head -n 1 \
+      | sed 's/.*value="//; s/"$//; s/&#43;/+/g; s/&#61;/=/g; s/&#47;/\//g')
+    if [ -z "$tok" ]; then
+      echo "HTTP none no-csrf-field"
+      exit 0
+    fi
+    pass=$(cat "$passfile")
+    res=$(curl -s -o /dev/null --max-time 120 -w '%{http_code} %{redirect_url}' -c "$jar" -b "$jar" \
+      -H "Referer: https://127.0.0.1:8080$path" \
+      --data-urlencode "gorilla.csrf.Token=$tok" --data-urlencode "email=$email" \
+      --data-urlencode "password=$pass" "$base$path")
+    ;;
+  *)
+    echo "HTTP none bad-mode"
+    exit 0
+    ;;
+esac
+code=${res%% *}
+loc=${res#* }
+loc=${loc#$base}
+echo "HTTP $code ${loc:--}"
+FORM_EOF
+
+# form_in NAME ARGS...: FORM_SH in that container; prints "HTTP STATUS REDIRECT-PATH".
+form_in() {
+  local n=$1
+  shift
+  safe_name "$n" || die "refusing container name $n"
+  printf '%s\n' "$FORM_SH" | docker exec -i "$n" bash -s -- "$@"
+}
+
+# http_status NAME PATH: the status of PATH for test.local in that container.
+http_status() {
+  dxc "$1" curl -s -o /dev/null -w '%{http_code}' -H 'Host: test.local' "http://127.0.0.1:8080$2" | tr -d '\r'
+}
+
+# media_row NAME: website/file of the first media row (the upload run.sh seed
+# made), through a read-only connection to the live database.
+media_row() {
+  dxc "$1" runuser -u holzcloud -- sqlite3 -readonly /opt/holzcloud/data/holzcloud.sqlite ".timeout 5000" \
+    "select website_id || '/' || filename from media order by id limit 1" | tr -d '\r'
+}
+
+# media_get NAME ROW: "HTTP STATUS SHA256" of /media/ROW for test.local, the body
+# hashed inside the container.
+media_get() {
+  dxc "$1" bash -c 'f=$(mktemp); c=$(curl -s -o "$f" -w "%{http_code}" -H "Host: test.local" "http://127.0.0.1:8080/media/$1"); echo "HTTP $c $(sha256sum < "$f" | cut -d" " -f1)"; rm -f "$f"' _ "$2" | tr -d '\r'
+}
+
 # migrations_at REF: the number of migration files at REF (git ls-tree), the level
 # a binary of REF migrates to. Never a typed number.
 migrations_at() {
@@ -391,6 +530,17 @@ mig_source() {
     echo "OLD_TAG: $OLD_TAG"
     echo "ORDER: none (the stage writes no order row; run.sh transfer reads this line)"
   } > "$MIG_SRC_OUT/baseline.txt"
+
+  # What the restored installation has to answer the same way afterwards.
+  deviation "DEVIATION[browser]: the login before the backup and after the restore is played with curl, not in a browser; the shipped unit sets HOLZCLOUD_SECURE=true, so the post over plain http carries a Referer with the https origin, and the hidden CSRF field is read out of the page"
+  put "$f" LOGIN-BEFORE "$(form_in "$MIG_SRC" login /admin/login login@example.test /root/.hc-login-pass /root/.hc-jar-t34 | sed 's/^HTTP //')"
+  dxc "$MIG_SRC" rm -f /root/.hc-jar-t34 || true
+  put "$f" PAGE-BEFORE "$(http_status "$MIG_SRC" /plugintest)"
+  MEDIA_ROW=$(media_row "$MIG_SRC") || MEDIA_ROW=""
+  [ -n "$MEDIA_ROW" ] || die "mig: the $OLD_TAG source has no media row after run.sh seed"
+  put "$f" MEDIA-PATH "/media/$MEDIA_ROW"
+  MEDIA_BEFORE=$(media_get "$MIG_SRC" "$MEDIA_ROW") || MEDIA_BEFORE=""
+  put "$f" MEDIA-BEFORE "$MEDIA_BEFORE"
 }
 
 # mig_backup: v0.1.1's backup.sh in place of today's, the document's manual line
@@ -442,10 +592,73 @@ mig_restore() {
   rc=0
   printf 'yes\n' | docker exec -i "$MIG_TGT" bash -c "$STAMP_SH" _ "$line" > "$MIG_SRC_OUT/mig-restore.out" 2>&1 || rc=$?
   put "$f" RESTORE-RC "$rc"
+  if unstamped "$MIG_SRC_OUT/mig-restore.out" | grep -q '^NOTICE: .* has no checksum file (made before 0\.1\.5); its files were not verified$'; then
+    put "$f" RESTORE-NOTICE yes
+  else
+    put "$f" RESTORE-NOTICE no
+  fi
+  if unstamped "$MIG_SRC_OUT/mig-restore.out" | grep -qx '=== Restore complete ==='; then
+    put "$f" RESTORE-COMPLETE yes
+  else
+    put "$f" RESTORE-COMPLETE no
+  fi
   put "$f" READY-SECONDS "$(sed -n 's/^READY_SECONDS="\${READY_SECONDS:-\([0-9]*\)}"$/\1/p' deploy/restore.sh | head -n 1)"
   put "$f" FIRST-START-S "$(awk '/ Starting holzcloud\.\.\.$/ { s = $1 } / === Restore complete ===$/ { c = $1 } END { if (s != "" && c != "") printf "%.1f\n", c - s; else print "?" }' "$MIG_SRC_OUT/mig-restore.out")"
+}
+
+# mig_after: what the first start after the restore wrote and how the restored
+# installation answers, on the target; then run.sh check.
+mig_after() {
+  local f=$1 t0 snaps s n lg rc=0 pass bad
+  # The journal since the restore began (its first stamp, the container's clock):
+  # the install's own first start, with its 69 migrations, lies before it.
+  t0=$(awk '/^WALL / { print $2 }' "$MIG_SRC_OUT/mig-restore.out" | head -n 1)
+  t0=${t0%%.*}
+  is_count "$t0" || die "mig: mig-restore.out has no WALL line"
+  dxc "$MIG_TGT" journalctl -u holzcloud --since "@$t0" -o cat --no-pager | tr -d '\r' \
+    | grep -E '"msg":"(pre-upgrade snapshot written|migration applied)"' > "$MIG_SRC_OUT/mig-journal.txt" || true
+  snaps=$(dxc "$MIG_TGT" bash -c 'cd /opt/holzcloud/data && ls -1 | grep -E "^pre-upgrade-.*\.sqlite$" || true' | tr -d '\r')
+  n=$(printf '%s\n' "$snaps" | grep -c . || true)
+  put "$f" SNAPSHOTS-AFTER "$n"
+  for s in $snaps; do
+    put "$f" SNAPSHOT-FILE "/opt/holzcloud/data/$s"
+    put "$f" SNAPSHOT-LEVEL "$(level_file "$MIG_TGT" "/opt/holzcloud/data/$s")"
+  done
+  put "$f" JOURNAL-SNAPSHOT-LINES "$(grep -c '"msg":"pre-upgrade snapshot written"' "$MIG_SRC_OUT/mig-journal.txt" || true)"
+  put "$f" JOURNAL-APPLIED-LINES "$(grep -c '"msg":"migration applied"' "$MIG_SRC_OUT/mig-journal.txt" || true)"
+  put "$f" JOURNAL-APPLIED-VERSIONS "$(applied_versions "$MIG_SRC_OUT/mig-journal.txt")"
   put "$f" LEVEL-AFTER "$(level_live "$MIG_TGT")"
   put "$f" LEVEL-EXPECTED-AFTER "$(migrations_at "$NEW_REF")"
+
+  # A restored installation has an account, so the setup form is closed.
+  put "$f" SETUP-AFTER "$(form_in "$MIG_TGT" get /admin/setup /root/.hc-jar-t34-probe | sed 's/^HTTP \([^ ]*\) .*/\1/')"
+  lg=$(form_in "$MIG_TGT" login /admin/login login@example.test /root/.hc-login-pass /root/.hc-jar-t34) || lg="HTTP error"
+  put "$f" LOGIN-AFTER "${lg#HTTP }"
+  put "$f" LOGIN-NEXT-AFTER "$(form_in "$MIG_TGT" get /admin/ /root/.hc-jar-t34 | sed 's/^HTTP //')"
+  dxc "$MIG_TGT" bash -c 'rm -f /root/.hc-jar-t34 /root/.hc-jar-t34-probe' || true
+  put "$f" PAGE-AFTER "$(http_status "$MIG_TGT" /plugintest)"
+  s=$(media_get "$MIG_TGT" "$MEDIA_ROW") || s=""
+  put "$f" MEDIA-AFTER "$s"
+  case "$MEDIA_BEFORE" in
+    "HTTP 200 "[0-9a-f]*)
+      if [ "$s" = "$MEDIA_BEFORE" ]; then put "$f" MEDIA-SHA-EQUAL yes; else put "$f" MEDIA-SHA-EQUAL no; fi
+      ;;
+    *) put "$f" MEDIA-SHA-EQUAL no ;;
+  esac
+
+  # run.sh check on the target: it restarts the unit and makes 17 assertions.
+  dxc "$MIG_TGT" systemctl reset-failed holzcloud > /dev/null 2>&1 || true
+  run_sh "$MIG_TGT" "$MIG_TGT_OUT" check || rc=$?
+  put "$f" CHECK-RC "$rc"
+  if [ -f "$MIG_TGT_OUT/check.txt" ]; then
+    cp "$MIG_TGT_OUT/check.txt" "$MIG_SRC_OUT/mig-check.txt"
+  else
+    : > "$MIG_SRC_OUT/mig-check.txt"
+  fi
+  pass=$(grep -c '^PASS ' "$MIG_SRC_OUT/mig-check.txt" || true)
+  bad=$(grep -c '^BAD ' "$MIG_SRC_OUT/mig-check.txt" || true)
+  put "$f" CHECK "$pass of $((pass + bad))"
+  put "$f" ORDER "none (the stage writes no order row; transfer only carries the line)"
 }
 
 stage_mig() {
@@ -454,7 +667,9 @@ stage_mig() {
   mig_source "$f"
   mig_backup "$f"
   mig_restore "$f"
+  mig_after "$f"
   printf 'MIG-01 %s\n' "$(verdict_mig01 "$f")" >> "$f"
+  printf 'MIG-02 %s\n' "$(verdict_mig02 "$f")" >> "$f"
 }
 
 # mig_deviations: deviations.txt of the source directory, the driver's own lines
@@ -509,7 +724,7 @@ write_summary() {
   local f=$SUMMARY_FILE kinds m1=NOT-RUN m2=NOT-RUN u1=NOT-RUN u2=NOT-RUN d
   if stage_wanted mig; then
     m1=$(verdict_mig01 "$MIG_SRC_OUT/mig.txt")
-    m2=NOT-RUN
+    m2=$(verdict_mig02 "$MIG_SRC_OUT/mig.txt")
   fi
   kinds=$(for d in "$MIG_SRC_OUT" "$UPD_OUT" "$RB_OUT"; do
     [ ! -f "$d/deviations.txt" ] || cat "$d/deviations.txt"
@@ -713,12 +928,31 @@ fx_mig() {
   local f=$1
   {
     echo "OLD-RELEASE: v0.1.1 (5bcae9b)"
-    echo "NEW-RELEASE: v0.1.4-60-gcfce101 (cfce101)"
-    echo "RESTORE-RC: 0"
+    echo "OLD-VERSION-LINE: holzcloud v0.1.1 (5bcae9b)"
+    echo "NEW-RELEASE: v0.1.4-233-gcfce101 (cfce101)"
+    echo "SEED-RC: 0"
+    echo "BACKUP-RC: 0"
+    echo "MANIFEST-VERSION: holzcloud v0.1.1 (5bcae9b)"
+    echo "SUMS-IN-BACKUP: no"
     echo "LEVEL-BEFORE: 60"
     echo "LEVEL-EXPECTED-BEFORE: 60"
+    echo "TRANSFER-RC: 0"
+    echo "RESTORE-RC: 0"
+    echo "RESTORE-NOTICE: yes"
+    echo "RESTORE-COMPLETE: yes"
+    echo "SNAPSHOTS-AFTER: 1"
+    echo "SNAPSHOT-LEVEL: 60"
+    echo "JOURNAL-SNAPSHOT-LINES: 1"
+    echo "JOURNAL-APPLIED-LINES: 9"
+    echo "JOURNAL-APPLIED-VERSIONS: 61 62 63 64 65 66 67 68 69"
     echo "LEVEL-AFTER: 69"
     echo "LEVEL-EXPECTED-AFTER: 69"
+    echo "SETUP-AFTER: 404"
+    echo "LOGIN-AFTER: 303 /admin/"
+    echo "PAGE-AFTER: 200"
+    echo "MEDIA-SHA-EQUAL: yes"
+    echo "CHECK: 17 of 17"
+    echo "ORDER: none (no order row)"
   } > "$f"
   if [ -n "${2:-}" ]; then fx_set "$f" "$2" "${3:-}"; fi
 }
@@ -728,9 +962,17 @@ selftest_verdict_mig01() {
   st_ans "verdict_mig01: no file" NOT-RUN verdict_mig01 "$ST_TMP/absent.txt"
   fx_mig "$f"
   st_ans "verdict_mig01: every key good" PASS verdict_mig01 "$f"
-  for kv in "RESTORE-RC|1" "RESTORE-RC|3" "RESTORE-RC|-" "LEVEL-BEFORE|61" "LEVEL-BEFORE|?" "LEVEL-BEFORE|-" \
-    "LEVEL-EXPECTED-BEFORE|-" "LEVEL-AFTER|60" "LEVEL-AFTER|68" "LEVEL-AFTER|-" "LEVEL-EXPECTED-AFTER|70" \
-    "LEVEL-EXPECTED-AFTER|-"; do
+  fx_mig "$f" LOGIN-AFTER "303 /admin/2fa/einrichten"
+  st_ans "verdict_mig01: a login sent on to the compulsory enrolment" PASS verdict_mig01 "$f"
+  # One wrong (or absent, "-") value per case; each must give FAIL.
+  for kv in "RESTORE-RC|1" "RESTORE-RC|3" "RESTORE-RC|-" "RESTORE-COMPLETE|no" "RESTORE-COMPLETE|-" \
+    "LEVEL-BEFORE|61" "LEVEL-BEFORE|?" "LEVEL-BEFORE|-" "LEVEL-EXPECTED-BEFORE|-" \
+    "LEVEL-AFTER|60" "LEVEL-AFTER|68" "LEVEL-AFTER|-" "LEVEL-EXPECTED-AFTER|70" "LEVEL-EXPECTED-AFTER|-" \
+    "CHECK|16 of 17" "CHECK|17 of 18" "CHECK|" "CHECK|-" "SETUP-AFTER|200" "SETUP-AFTER|-" \
+    "LOGIN-AFTER|200 -" "LOGIN-AFTER|303 /admin/login" "LOGIN-AFTER|403 -" "LOGIN-AFTER|-" \
+    "PAGE-AFTER|404" "PAGE-AFTER|-" "MEDIA-SHA-EQUAL|no" "MEDIA-SHA-EQUAL|-" \
+    "SNAPSHOTS-AFTER|0" "SNAPSHOTS-AFTER|2" "SNAPSHOTS-AFTER|-" "SNAPSHOT-LEVEL|69" "SNAPSHOT-LEVEL|?" \
+    "SNAPSHOT-LEVEL|-"; do
     fx_mig "$f" "${kv%%|*}" "${kv#*|}"
     st_ans "verdict_mig01: ${kv%%|*} '${kv#*|}'" FAIL verdict_mig01 "$f"
   done
@@ -742,6 +984,53 @@ selftest_verdict_mig01() {
   st_ans "verdict_mig01: two empty levels are no level" FAIL verdict_mig01 "$f"
 }
 
+selftest_verdict_mig02() {
+  local f=$ST_TMP/mig.txt kv
+  st_ans "verdict_mig02: no file" NOT-RUN verdict_mig02 "$ST_TMP/absent.txt"
+  fx_mig "$f"
+  st_ans "verdict_mig02: every key good" PASS verdict_mig02 "$f"
+  for kv in "OLD-RELEASE|v0.1.1" "OLD-RELEASE|v0.1.2 (5bcae9b)" "OLD-RELEASE|v0.1.1 (zzz)" "OLD-RELEASE|-" \
+    "NEW-RELEASE|cfce101" "NEW-RELEASE|v0.1.4-233-gcfce101 ()" "NEW-RELEASE|-" \
+    "MANIFEST-VERSION|holzcloud v0.1.4 (abc1234)" "MANIFEST-VERSION|-" \
+    "LEVEL-BEFORE|-" "LEVEL-BEFORE|x" "LEVEL-AFTER|-" "RESTORE-NOTICE|no" "RESTORE-NOTICE|-" \
+    "RESTORE-COMPLETE|no" "RESTORE-COMPLETE|-" "JOURNAL-SNAPSHOT-LINES|0" "JOURNAL-SNAPSHOT-LINES|2" \
+    "JOURNAL-SNAPSHOT-LINES|-" "JOURNAL-APPLIED-LINES|8" "JOURNAL-APPLIED-LINES|69" "JOURNAL-APPLIED-LINES|-" \
+    "JOURNAL-APPLIED-VERSIONS|61 62 63 64 65 66 67 68" "JOURNAL-APPLIED-VERSIONS|62 63 64 65 66 67 68 69 70" \
+    "JOURNAL-APPLIED-VERSIONS|61 62 63 65 64 66 67 68 69" "JOURNAL-APPLIED-VERSIONS|" "JOURNAL-APPLIED-VERSIONS|-"; do
+    fx_mig "$f" "${kv%%|*}" "${kv#*|}"
+    st_ans "verdict_mig02: ${kv%%|*} '${kv#*|}'" FAIL verdict_mig02 "$f"
+  done
+  # No migration at all is no restore across one.
+  fx_mig "$f" LEVEL-AFTER 60
+  fx_set "$f" JOURNAL-APPLIED-LINES 0
+  fx_set "$f" JOURNAL-APPLIED-VERSIONS ""
+  st_ans "verdict_mig02: the same level before and after" FAIL verdict_mig02 "$f"
+  # Another pair of levels with its own consecutive list passes.
+  fx_mig "$f" LEVEL-BEFORE 67
+  fx_set "$f" JOURNAL-APPLIED-LINES 2
+  fx_set "$f" JOURNAL-APPLIED-VERSIONS "68 69"
+  st_ans "verdict_mig02: levels 67 to 69" PASS verdict_mig02 "$f"
+}
+
+selftest_applied() {
+  local j=$ST_TMP/journal.txt
+  {
+    echo '{"time":"2026-11-21T10:31:48.25Z","level":"INFO","msg":"pre-upgrade snapshot written","path":"/opt/holzcloud/data/pre-upgrade-v0.1.5-20261121-103148.sqlite"}'
+    echo '{"time":"2026-11-21T10:31:48.33Z","level":"INFO","msg":"migration applied","version":61,"type":"sql","duration_ms":46}'
+    echo '{"time":"2026-11-21T10:31:48.34Z","level":"INFO","msg":"migration applied","version":62,"type":"sql","duration_ms":0}'
+    echo '{"time":"2026-11-21T10:31:48.35Z","level":"INFO","msg":"plugin loaded","plugin":"suche","version":"1.0.0"}'
+    echo '{"time":"2026-11-21T10:31:48.36Z","level":"INFO","msg":"migration applied","version":63,"type":"go","duration_ms":4}'
+    echo '2026/11/21 10:31:46 INFO migration applied version=64 type=sql duration_ms=7'
+  } > "$j"
+  st_ans "applied_versions: three JSON lines in order" "61 62 63" applied_versions "$j"
+  : > "$j"
+  st_ans "applied_versions: an empty journal" "" applied_versions "$j"
+  st_ans "applied_versions: no file" ERROR applied_versions "$ST_TMP/absent.txt"
+  echo '{"level":"INFO","msg":"migration applied","version":70,"type":"sql"}' > "$j"
+  echo '{"level":"ERROR","msg":"migrations failed","err":"goose up: version 71"}' >> "$j"
+  st_ans "applied_versions: a failure line is no applied migration" "70" applied_versions "$j"
+}
+
 cmd_selftest() {
   ST_N=0
   ST_BAD=0
@@ -751,6 +1040,8 @@ cmd_selftest() {
   selftest_stages
   selftest_level
   selftest_verdict_mig01
+  selftest_verdict_mig02
+  selftest_applied
   if [ "$ST_BAD" -ne 0 ]; then
     echo "SELFTEST FAILED: $ST_BAD of $ST_N cases"
     exit 1
