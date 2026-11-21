@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -733,6 +734,81 @@ func TestAMarkerThatNamesNoSnapshotIsIgnored(t *testing.T) {
 			n, level, ok := markerIn(t, dataDir)
 			if !ok || n != filepath.Base(got) || level != fmt.Sprint(highest-1) {
 				t.Errorf("marker after the new snapshot: %q %q %v, want %s %d", n, level, ok, filepath.Base(got), highest-1)
+			}
+		})
+	}
+}
+
+// A fresh snapshot that gets no marker of its own must not leave an older
+// marker standing: the older marker survives a rollback to a binary before
+// 0.1.5, and if this update then fails part-way every restart would cite that
+// older snapshot, which lacks everything written since (WR-01 of the phase 34
+// review). Both ways a snapshot is written without a marker are played: the
+// level cannot be read, and the marker cannot be written.
+func TestASnapshotWithoutAMarkerOfItsOwnEndsTheOlderMarker(t *testing.T) {
+	for name, fail := range map[string]func(t *testing.T){
+		"level unreadable": func(t *testing.T) {
+			saved := schemaLevel
+			schemaLevel = func(*sql.DB) (int64, error) { return 0, errors.New("database is locked") }
+			t.Cleanup(func() { schemaLevel = saved })
+		},
+		"marker not written": func(t *testing.T) {
+			saved := writeMarker
+			writeMarker = func(string, string, int64) error { return errors.New("no space left on device") }
+			t.Cleanup(func() { writeMarker = saved })
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			t.Setenv("HOLZCLOUD_DATA_DIR", dataDir)
+			highest := highestLevel(t)
+			saved := Version
+			Version = "v9.9.9-test"
+			t.Cleanup(func() { Version = saved })
+			cfg, err := config.Load()
+			if err != nil {
+				t.Fatalf("config.Load: %v", err)
+			}
+			database, err := db.Open(cfg.DBPath)
+			if err != nil {
+				t.Fatalf("db.Open: %v", err)
+			}
+			defer database.Close()
+			migrateUpTo(t, database, highest-2)
+
+			// A marker an earlier update left behind at this same level,
+			// as a rollback to an older binary leaves it.
+			const stale = "pre-upgrade-v0.1.4-20200301-000000.sqlite"
+			plantSnapshots(t, dataDir, stale)
+			if err := os.WriteFile(filepath.Join(dataDir, "pre-upgrade.pending"),
+				[]byte(fmt.Sprintf("%s %d\n", stale, highest-2)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			sub := t.Run("the update's first start", func(t *testing.T) {
+				fail(t)
+				fresh, err := snapshotBeforeMigrating(cfg, database)
+				if err != nil || fresh == "" || filepath.Base(fresh) == stale {
+					t.Fatalf("first start: snapshot %q, err %v, want a fresh one", fresh, err)
+				}
+				if n, l, ok := markerIn(t, dataDir); ok {
+					t.Errorf("a marker outlived the fresh snapshot %s: %s %s", filepath.Base(fresh), n, l)
+				}
+				afterTheStampOf(t, fresh)
+			})
+			if !sub {
+				return
+			}
+
+			// The update fails part-way; the restart must not cite the
+			// stale snapshot.
+			migrateUpTo(t, database, highest-1)
+			got, err := snapshotBeforeMigrating(cfg, database)
+			if err != nil {
+				t.Fatalf("restart: %v", err)
+			}
+			if got == "" || filepath.Base(got) == stale {
+				t.Fatalf("the restart cites %q, want anything but the stale %s", got, stale)
 			}
 		})
 	}

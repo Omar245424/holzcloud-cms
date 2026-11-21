@@ -814,6 +814,14 @@ var preUpgradeSnapshotNameRE = regexp.MustCompile(`^pre-upgrade-[0-9A-Za-z._+-]+
 // snapshots never take it for one.
 const preUpgradeMarker = "pre-upgrade.pending"
 
+// schemaLevel and writeMarker are what snapshotBeforeMigrating reads the level
+// with and writes the marker with; variables only so a test can make either
+// fail, which a real data directory does under a busy lock or a full disk.
+var (
+	schemaLevel = db.CurrentVersion
+	writeMarker = writePreUpgradeMarker
+)
+
 // snapshotBeforeMigrating writes the pre-upgrade snapshot into the data
 // directory when migrations are pending, keeps the newest five, and returns
 // its path; "" when nothing was pending (or that could not be told, which is
@@ -851,7 +859,7 @@ func snapshotBeforeMigrating(cfg config.Config, database *db.DB) (string, error)
 		forgetPreUpgradeSnapshot(cfg)
 		return "", nil
 	}
-	level, levelErr := db.CurrentVersion(database.Write)
+	level, levelErr := schemaLevel(database.Write)
 	if levelErr != nil {
 		slog.Warn("cannot read the schema level before the snapshot", "err", levelErr)
 	} else if kept, keptLevel, ok := pendingPreUpgradeSnapshot(cfg.DataDir); ok && level > keptLevel {
@@ -868,15 +876,23 @@ func snapshotBeforeMigrating(cfg config.Config, database *db.DB) (string, error)
 		slog.Error("cannot snapshot before migrating", "err", err)
 		return "", err
 	}
+	// A snapshot without a marker of its own ends any older marker: one may
+	// have survived a rollback to a binary before 0.1.5, and if this attempt
+	// then fails part-way, a restart would find the database above that
+	// marker's level and cite its snapshot, which lacks everything written
+	// since. Without a marker each restart writes a fresh snapshot instead,
+	// as before the marker existed.
 	if levelErr != nil {
 		slog.Info("pre-upgrade snapshot written", "path", snapshot)
+		dropOlderPreUpgradeMarker(cfg, snapshot)
 	} else {
 		slog.Info("pre-upgrade snapshot written", "path", snapshot, "level", level)
 		// A marker that cannot be written is no reason to stop: the snapshot
 		// itself is the way back for this attempt, and only a restart after
 		// a failure would write another one.
-		if err := writePreUpgradeMarker(cfg.DataDir, filepath.Base(snapshot), level); err != nil {
+		if err := writeMarker(cfg.DataDir, filepath.Base(snapshot), level); err != nil {
 			slog.Warn("cannot write the pre-upgrade marker", "path", filepath.Join(cfg.DataDir, preUpgradeMarker), "err", err)
+			dropOlderPreUpgradeMarker(cfg, snapshot)
 		}
 	}
 	if err := db.PruneSnapshots(cfg.DataDir, 5, snapshot); err != nil {
@@ -962,6 +978,21 @@ func forgetPreUpgradeSnapshot(cfg config.Config) {
 	switch {
 	case err == nil:
 		slog.Info("pre-upgrade marker removed: the database stands at this binary's level", "path", markerPath)
+	case !errors.Is(err, os.ErrNotExist):
+		slog.Warn("cannot remove the pre-upgrade marker", "path", markerPath, "err", err)
+	}
+}
+
+// dropOlderPreUpgradeMarker removes preUpgradeMarker when snapshot was written
+// and no marker naming it could be: whatever marker is there names an older
+// snapshot, and it must not be cited for this attempt.
+func dropOlderPreUpgradeMarker(cfg config.Config, snapshot string) {
+	markerPath := filepath.Join(cfg.DataDir, preUpgradeMarker)
+	err := os.Remove(markerPath)
+	switch {
+	case err == nil:
+		slog.Warn("pre-upgrade marker removed: it names an older snapshot than the one just written",
+			"path", markerPath, "snapshot", snapshot)
 	case !errors.Is(err, os.ErrNotExist):
 		slog.Warn("cannot remove the pre-upgrade marker", "path", markerPath, "err", err)
 	}
