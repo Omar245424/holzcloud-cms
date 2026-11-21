@@ -274,6 +274,233 @@ verdict_mig02() {
   echo FAIL
 }
 
+# doc_block FILE SECTION N: the logical lines of the Nth fenced bash block of the
+# section whose heading line is exactly "## SECTION" (a ### subsection belongs to
+# it; the next # or ## heading ends it). Backslash-continued lines are joined,
+# blank lines and lines that begin with # are dropped, as run.sh's doc_awk does.
+# Fails when the file, the section or the block is missing, or N is no number
+# above zero. The stages read every line they play through this function: a
+# command of the Updating or Rolling back blocks is never typed into this file.
+doc_block() {
+  local f=${1:-} s=${2:-} n=${3:-} out rc=0
+  [ -f "$f" ] || return 1
+  is_count "$n" || return 1
+  [ "$n" -gt 0 ] || return 1
+  out=$(S="$s" N="$n" awk '
+    BEGIN { s = ENVIRON["S"]; want = ENVIRON["N"] + 0; insec = 0; found = 0; nb = 0; inf = 0; take = 0; hascont = 0; cont = "" }
+    {
+      line = $0
+      sub(/\r$/, "", line)
+      if (inf) {
+        if (line ~ /^[ \t]*```[ \t]*$/) {
+          if (hascont) { print cont; hascont = 0; cont = "" }
+          inf = 0
+          next
+        }
+        if (!take) next
+        t = line
+        sub(/^[ \t]+/, "", t)
+        if (hascont) {
+          t = cont " " t; hascont = 0; cont = ""
+        } else if (t == "" || t ~ /^#/) {
+          next
+        }
+        if (t ~ /\\$/) { sub(/[ \t]*\\$/, "", t); cont = t; hascont = 1; next }
+        sub(/[ \t]+$/, "", t)
+        if (t == "") next
+        print t
+        next
+      }
+      if (line ~ /^[ \t]*```/) {
+        inf = 1
+        lang = line
+        sub(/^[ \t]*`+[ \t]*/, "", lang)
+        sub(/[ \t].*$/, "", lang)
+        take = 0
+        if (insec && lang == "bash") { nb++; take = (nb == want) }
+        next
+      }
+      if (line ~ /^# / || line ~ /^## /) {
+        insec = 0
+        if (!found && line == "## " s) { insec = 1; found = 1 }
+        next
+      }
+    }
+    END { if (!found) exit 3; if (nb < want) exit 4 }' "$f") || rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
+  [ -n "$out" ] || return 4
+  printf '%s\n' "$out"
+}
+
+# play_kind LINE: how a document line is played in the container, mirroring
+# run.sh's doc_cmd: scp-binary (`scp holzcloud user@host:[dir]`, played as docker
+# cp of the binary under test), scp-files (`scp deploy/a deploy/b user@host:[dir]`,
+# single files directly in deploy/, played as docker cp of the working tree's
+# files), build (a `go build` line, skipped: the binary was built by that same
+# line before), run (every other line, as root in the container). Fails for an
+# scp line of any other shape and for a line with an angle-bracket placeholder:
+# a line this file cannot translate ends the stage.
+play_kind() {
+  local l=${1:-} last
+  [ -n "$l" ] || return 1
+  if printf '%s\n' "$l" | grep -Eq '<[A-Za-z][A-Za-z0-9_.-]*>'; then
+    return 1
+  fi
+  case "$l" in
+    "scp "*)
+      set -f
+      # shellcheck disable=SC2086
+      set -- $l
+      set +f
+      for last in "$@"; do :; done
+      if [ "$#" -eq 3 ] && [ "$2" = holzcloud ] && [ "${3#*:}" != "$3" ]; then
+        echo scp-binary
+        return 0
+      fi
+      if [ "$#" -ge 3 ] && [ "${last#*:}" != "$last" ]; then
+        shift
+        while [ "$#" -gt 1 ]; do
+          case "$1" in
+            deploy/*/* | deploy/) return 1 ;;
+            deploy/?*) ;;
+            *) return 1 ;;
+          esac
+          shift
+        done
+        echo scp-files
+        return 0
+      fi
+      return 1
+      ;;
+    *"go build"*) echo build ;;
+    *) echo run ;;
+  esac
+}
+
+# restore_with_paths FILE: the distinct snapshot paths that the "restore with:"
+# lines of a journal of JSON lines name, in the order they first appear.
+restore_with_paths() {
+  [ -f "${1:-}" ] || return 1
+  sed -n 's/^{.*"msg":"restore with: [^"]* cp \([^ "]*\) [^"]*".*/\1/p' "$1" | awk '!seen[$0]++'
+}
+
+# json_num LINE KEY: the number of "KEY":N in one JSON line; empty when absent or
+# not a number. json_str LINE KEY: the string "KEY":"..." (no escaped quote inside).
+# json_err LINE: the value of "err", the last key of the server's error lines,
+# with its escapes as they stand.
+json_num() { printf '%s\n' "${1:-}" | sed -n "s/.*\"$2\":\([0-9][0-9]*\)[,}].*/\1/p" | head -n 1; }
+json_str() { printf '%s\n' "${1:-}" | sed -n "s/.*\"$2\":\"\([^\"]*\)\".*/\1/p" | head -n 1; }
+json_err() { printf '%s\n' "${1:-}" | sed -n 's/.*"err":"\(.*\)"}$/\1/p' | head -n 1; }
+
+# json_escape TEXT: TEXT as it stands inside a JSON string (backslash, quote).
+json_escape() { printf '%s\n' "${1:-}" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+# guard_sentence GOFILE DB BIN: the sentence NewerSchemaError.Error returns, taken
+# from the string pieces of its fmt.Sprintf in GOFILE (internal/db/schema_guard.go),
+# with the two %d replaced by DB and BIN. Never a typed copy of the sentence.
+guard_sentence() {
+  local g=${1:-} s
+  [ -f "$g" ] || return 1
+  s=$(awk '
+    /return fmt\.Sprintf\(/ { on = 1 }
+    on {
+      line = $0
+      while (match(line, /"([^"\\]|\\.)*"/)) {
+        out = out substr(line, RSTART + 1, RLENGTH - 2)
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }
+    on && /e\.DBLevel/ { print out; done = 1; exit }
+    END { if (!done) exit 1 }' "$g") || return 1
+  [ -n "$s" ] || return 1
+  s=$(printf '%s\n' "$s" | sed 's/\\"/"/g')
+  printf '%s\n' "$s" | sed "s/%d/$2/; s/%d/$3/"
+}
+
+# compare_state S0 S2: the two state captures line by line; one line "BAD s0 ... |
+# s2 ..." per difference (a line missing on one side included), then "bad=N".
+# Two empty captures are no comparison and count as one difference.
+compare_state() {
+  awk '
+    NR == FNR { a[FNR] = $0; na = FNR; next }
+    { b[FNR] = $0; nb = FNR }
+    END {
+      n = (na > nb) ? na : nb
+      bad = 0
+      if (n == 0) { print "BAD no state on either side"; bad = 1 }
+      for (i = 1; i <= n; i++) {
+        if (!(i in a) || !(i in b) || a[i] != b[i]) {
+          printf "BAD s0 %s | s2 %s\n", ((i in a) ? a[i] : "(none)"), ((i in b) ? b[i] : "(none)")
+          bad++
+        }
+      }
+      print "bad=" bad
+    }' "$1" "$2"
+}
+
+# kv_level FILE KEY WANT: the key occurs once, is a number and equals WANT.
+kv_level() {
+  kv_num "$1" "$2" && [ "$(kv "$1" "$2")" -eq "$3" ]
+}
+
+# verdict_upd02 FILE: PASS, FAIL or NOT-RUN (no file) for the key lines of rb.txt.
+# The levels come from the migration counts the stage wrote (LEVEL-EXPECTED-B0 of
+# this tree, LEVEL-EXPECTED-F, two more), never typed: the update stopped with a
+# message naming F's last migration, after it had applied the one before; one
+# snapshot was written and every later start of the loop kept it (KEPT = STARTS
+# - 1), every start named that one snapshot in its "restore with:" line; the
+# database stood one level above B0; the previous binary refused it with the
+# guard's sentence and both levels; Rolling back block 1 ran without a failing
+# line, the old version answers ok with integrity ok, the last line found nothing
+# to migrate, the database is at B0's level without F's table, the set-aside copy
+# at the half level, no marker left, and the state equals the one before.
+verdict_upd02() {
+  local f=${1:-} b0 fl st rcs r rz bv
+  if [ ! -f "$f" ]; then
+    echo NOT-RUN
+    return 0
+  fi
+  if kv_num "$f" LEVEL-EXPECTED-B0 && kv_num "$f" LEVEL-EXPECTED-F && kv_num "$f" STARTS \
+    && [ "$(kv_count "$f" B0-VERSION)" = 1 ] && [ -n "$(kv "$f" B0-VERSION)" ]; then
+    b0=$(kv "$f" LEVEL-EXPECTED-B0)
+    fl=$(kv "$f" LEVEL-EXPECTED-F)
+    st=$(kv "$f" STARTS)
+    bv=$(kv "$f" B0-VERSION)
+    rcs=$(kv "$f" ROLLBACK-RC)
+    rz=$(kv "$f" ROLLBACK-READYZ)
+    if [ "$fl" -eq "$((b0 + 2))" ] && [ "$st" -ge 2 ] \
+      && kv_num "$f" UPDATE-CHECK-RC && [ "$(kv "$f" UPDATE-CHECK-RC)" -ne 0 ] \
+      && kv_is "$f" JOURNAL-SNAPSHOT-WRITTEN 1 && kv_level "$f" JOURNAL-SNAPSHOT-KEPT "$((st - 1))" \
+      && kv_level "$f" JOURNAL-MIGRATIONS-FAILED "$st" && kv_level "$f" JOURNAL-RESTORE-WITH "$st" \
+      && kv_is "$f" RESTORE-WITH-DISTINCT-PATHS 1 && kv_is "$f" RESTORE-WITH-NAMES-WRITTEN yes \
+      && [ "$(kv_count "$f" STOP-MESSAGE)" = 1 ] \
+      && case "$(kv "$f" STOP-MESSAGE)" in *"partial migration error ("*"version:$fl)"*) true ;; *) false ;; esac \
+      && kv_is "$f" APPLIED-BEFORE-FAILURE "$((b0 + 1))" \
+      && kv_level "$f" LEVEL-HALF "$((b0 + 1))" \
+      && kv_is "$f" GUARD-LINE yes && kv_level "$f" GUARD-DB-LEVEL "$((b0 + 1))" \
+      && kv_level "$f" GUARD-BINARY-LEVEL "$b0" && kv_is "$f" GUARD-SENTENCE yes \
+      && [ "$(kv_count "$f" ROLLBACK-RC)" = 1 ] && [ -n "$rcs" ] \
+      && [ "$(kv_count "$f" ROLLBACK-READYZ)" = 1 ] \
+      && case "$rz" in *'"status":"ok"'*) true ;; *) false ;; esac \
+      && case "$rz" in *"\"version\":\"$bv\""*) true ;; *) false ;; esac \
+      && case "$rz" in *'"integrity":"ok"'*) true ;; *) false ;; esac \
+      && kv_is "$f" ROLLBACK-CHECK-LINE "no migration, no snapshot" \
+      && kv_level "$f" LEVEL-AFTER-ROLLBACK "$b0" && kv_is "$f" T34-OK-TABLE absent \
+      && kv_level "$f" AFTER-UPDATE-LEVEL "$((b0 + 1))" && kv_is "$f" MARKER-AFTER absent \
+      && kv_is "$f" COMPARE-S0-S2 "bad=0"; then
+      for r in $rcs; do
+        [ "$r" = 0 ] || {
+          echo FAIL
+          return 0
+        }
+      done
+      echo PASS
+      return 0
+    fi
+  fi
+  echo FAIL
+}
+
 # ---------------------------------------------------------------------------
 # The containers. Every docker call names a container that safe_name has
 # accepted, and every run.sh call a directory that safe_out has accepted.
@@ -703,10 +930,511 @@ mig_versions() {
   } >> "$f"
 }
 
-# head_binary: the version line of the HEAD build, from a container that runs it.
+# ---------------------------------------------------------------------------
+# The document played line by line (stages upd and rb). Every line comes from
+# doc_block; play_kind says how it is played; nothing of the Updating or Rolling
+# back blocks is typed here.
+# ---------------------------------------------------------------------------
+
+# Run INSIDE the container. PLAY_SH: $1 is one document line, run as root in its
+# own bash; every output line is stamped with the container's clock, then a line
+# "WALL t0 t1", and the status is the line's own. The line's bash has pipefail,
+# so the status of a pipeline is that of its last failing command: the check
+# lines pipe curl into jq, and jq alone exits 0 on an empty input. What runs is
+# the line as written.
+PLAY_SH='set -o pipefail
+t0=$(date +%s.%N)
+bash -o pipefail -c "$1" 2>&1 | while IFS= read -r l; do printf "%s %s\n" "$(date +%s.%N)" "$l"; done
+rc=${PIPESTATUS[0]}
+t1=$(date +%s.%N)
+echo "WALL $t0 $t1"
+exit "$rc"'
+
+# Set by play_block: the status of each line it played, in order, and the
+# scratch file (.lst, never pasted) holding the output of each, one per line.
+PLAY_RCS=""
+PLAY_FILES=""
+
+# play_block NAME OUT TAG SECTION N BIN: the Nth bash block of SECTION of the
+# document, line by line in the container NAME, each line through play_kind:
+# scp-binary as docker cp of BIN (DEVIATION[scp]), scp-files as docker cp of the
+# working tree's files (DEVIATION[scp]), build skipped (the binary was made by
+# that same line in the scratch clone, DEVIATION[synthetic-build]), run in its
+# own shell (PLAY_SH). OUT gets "$ LINE", the stamped output and "RC N" per line.
+# A block that is not in the document, or a line play_kind refuses, ends the stage.
+play_block() {
+  local n=$1 out=$2 tag=$3 sec=$4 b=$5 bin=${6:-} lines line kind rc dest f lf i=0 files
+  safe_name "$n" || die "refusing container name $n"
+  lines=$(doc_block "$DEPLOY_DOC" "$sec" "$b") \
+    || die "the document and this file have drifted apart: $DEPLOY_DOC has no bash block $b in the section '$sec'"
+  PLAY_RCS=""
+  PLAY_FILES=""
+  while IFS= read -r line; do
+    i=$((i + 1))
+    kind=$(play_kind "$line") || die "no translation for this line of '$sec', block $b: $line"
+    lf=$(dirname "$out")/$tag-$b-$i.lst
+    printf '$ %s\n' "$line" >> "$out"
+    say ">>> $tag $sec $b.$i ($kind): $line"
+    rc=0
+    case "$kind" in
+      scp-binary)
+        [ -n "$bin" ] && [ -f "$bin" ] || die "$sec block $b sends a binary, and there is none to send ('$bin')"
+        dest=${line##*:}
+        [ -n "$dest" ] || dest=/root/holzcloud
+        deviation "DEVIATION[scp]: '$line' was played as docker cp of the synthetic build of this update to $dest in the container (there is no ssh and no second machine here)"
+        docker cp "$bin" "$n:$dest" < /dev/null > "$lf" 2>&1 || rc=$?
+        ;;
+      scp-files)
+        dest=${line##*:}
+        [ -n "$dest" ] || dest=/root
+        files=$(printf '%s\n' "$line" | awk '{ for (i = 2; i < NF; i++) printf "%s ", $i }' | sed 's/ $//')
+        deviation "DEVIATION[scp]: '$line' was played as docker cp of the working tree's $files to $dest/ in the container (there is no ssh and no second machine here)"
+        : > "$lf"
+        for f in $files; do
+          [ -f "$ROOT/$f" ] || die "$sec block $b: $f is not a file of the working tree"
+          docker cp "$ROOT/$f" "$n:$dest/" < /dev/null >> "$lf" 2>&1 || rc=$?
+        done
+        ;;
+      build)
+        printf 'SKIP[synthetic-build] the binary of this update was built by this line in a scratch clone before the update\n' > "$lf"
+        ;;
+      run)
+        docker exec "$n" bash -c "$PLAY_SH" _ "$line" < /dev/null > "$lf" 2>&1 || rc=$?
+        ;;
+    esac
+    cat "$lf" >> "$out"
+    printf 'RC %s\n' "$rc" >> "$out"
+    PLAY_RCS="${PLAY_RCS:+$PLAY_RCS }$rc"
+    PLAY_FILES="${PLAY_FILES:+$PLAY_FILES }$lf"
+  done <<< "$lines"
+}
+
+# play_text FILE: the output of one played line without the clock and without the
+# WALL line.
+play_text() { unstamped "$1" | grep -v '^WALL ' || true; }
+
+# nth_word N WORDS...: the Nth of the words.
+nth_word() {
+  local k=$1
+  shift
+  [ "$k" -ge 1 ] && [ "$k" -le "$#" ] || return 1
+  shift $((k - 1))
+  printf '%s\n' "$1"
+}
+
+# readyz_of FILE: the jq output of a played /readyz line, joined to one line
+# without blanks (the values carry none).
+readyz_of() {
+  play_text "$1" | awk '/^\{/ { on = 1 } on { print } on && /^\}/ { exit }' | tr -d ' \n'
+}
+
+# stage_zips NAME: the plugin archives of this tree, where run.sh seed reads them.
+stage_zips() {
+  local id
+  dxc "$1" mkdir -p /opt/holzcloud/plugin-zips || die "could not create /opt/holzcloud/plugin-zips"
+  for id in $PLUGIN_IDS; do
+    [ -f "$ROOT/plugins/$id/$id.zip" ] || die "plugins/$id/$id.zip is missing in the working tree"
+    docker cp "$ROOT/plugins/$id/$id.zip" "$1:/opt/holzcloud/plugin-zips/$id.zip" > /dev/null \
+      || die "docker cp of plugins/$id/$id.zip failed"
+  done
+  deviation "DEVIATION[fixture]: the five plugin archives of this tree are copied into /opt/holzcloud/plugin-zips before run.sh seed; with the website, page, AI key and test image run.sh seed makes, they stand in for operator work in the admin and are no step of the document"
+}
+
+# ---------------------------------------------------------------------------
+# Synthetic builds (DEVIATION[synthetic-build]): this tree with added migrations,
+# in a scratch clone (git clone --no-checkout and a checkout of NEW_REF, as
+# run.sh's bins_build does; never git worktree), one throwaway local commit per
+# build so that git describe names each build apart, the Build line of the
+# document played in the clone. The binaries and their .info are kept in the
+# stage directory; the clone is deleted by a trap, also on failure. Nothing is
+# committed or pushed in this repository.
+# ---------------------------------------------------------------------------
+
+# syn_clone DIR: the clone in DIR/src at NEW_REF; dies unless the highest migration
+# number equals the number of migration files (the next file is that plus one).
+syn_clone() {
+  local top
+  git clone -q --no-checkout "$ROOT" "$1/src" || die "synthetic build: git clone failed"
+  git -C "$1/src" checkout -q -f --detach "$NEW_REF" || die "synthetic build: git checkout of $NEW_REF failed"
+  top=$(ls "$1/src/internal/db/migrations" | grep -E '^[0-9]+_.*\.sql$' | sort | tail -n 1 | sed 's/_.*//; s/^0*//')
+  [ "${top:-0}" -eq "$(migrations_at "$NEW_REF")" ] \
+    || die "synthetic build: the highest migration ($top) is not the number of migration files at $NEW_REF"
+}
+
+# syn_migration DIR VERSION NAME UP...: a migration file VERSION_NAME.sql in the
+# clone, the Up statements given, a Down that drops the table of the first.
+syn_migration() {
+  local d=$1 v=$2 name=$3 t
+  shift 3
+  t=$(printf '%s\n' "$1" | sed -n 's/^CREATE TABLE \([a-z0-9_]*\) .*/\1/p')
+  {
+    echo "-- +goose Up"
+    echo "-- Phase 34: a throwaway migration of a synthetic build (deploy/test/upgrade-verify.sh); never committed."
+    for s in "$@"; do echo "$s"; done
+    echo
+    echo "-- +goose Down"
+    echo "DROP TABLE $t;"
+  } > "$d/src/internal/db/migrations/$(printf '%05d' "$v")_$name.sql"
+}
+
+# syn_commit_build DIR BIN MESSAGE: the added files committed in the clone (its
+# own identity, no hook, no signature), the Build line of the document played
+# there, the binary moved to BIN and BIN.info written.
+syn_commit_build() {
+  local src=$1/src bin=$2 line
+  git -C "$src" add internal/db/migrations || die "synthetic build: git add failed"
+  git -C "$src" -c user.name=t34 -c user.email=t34@invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null \
+    commit -q -m "$3" || die "synthetic build: git commit in the scratch clone failed"
+  line=$(doc_block "$DEPLOY_DOC" Build 1) || die "the document has no Build line"
+  [ "$(printf '%s\n' "$line" | wc -l | tr -d ' ')" = 1 ] || die "the Build block of $DEPLOY_DOC is not one line"
+  say "synthetic build ($3): $line"
+  (cd "$src" && bash -c "$line") || die "synthetic build: the Build line failed"
+  [ -f "$src/holzcloud" ] || die "synthetic build: the Build line produced no holzcloud file"
+  mv "$src/holzcloud" "$bin"
+  {
+    echo "version: $(git -C "$src" describe --tags --always)"
+    echo "commit: $(git -C "$src" rev-parse --short HEAD)"
+    echo "sha256: $(shasum -a 256 "$bin" | awk '{ print $1 }')"
+    echo "migrations: $(ls "$src/internal/db/migrations" | grep -c '\.sql$')"
+  } > "$bin.info"
+}
+
+# info_of BIN KEY: one value of BIN.info.
+info_of() { sed -n "s/^$2: //p" "$1.info" | head -n 1; }
+
+# syn_build_rb DIR: F, this tree plus a migration that succeeds and one that fails
+# after it has created a table (two files, because goose runs each file in its
+# own transaction: one failing file alone is rolled back and the database stays
+# at the old level). The binary is DIR/syn/holzcloud-f.
+syn_build_rb() {
+  local d=$1 b0
+  b0=$(migrations_at "$NEW_REF")
+  mkdir -p "$d/syn"
+  (
+    set -e
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/t34-syn-rb.XXXXXX")
+    trap 'rm -rf "${tmp:?}"' EXIT
+    syn_clone "$tmp"
+    syn_migration "$tmp" "$((b0 + 1))" t34_ok "CREATE TABLE t34_ok (id INTEGER PRIMARY KEY) STRICT;"
+    syn_migration "$tmp" "$((b0 + 2))" t34_fail "CREATE TABLE t34_half (id INTEGER PRIMARY KEY) STRICT;" \
+      "INSERT INTO t34_no_such_table VALUES (1);"
+    syn_commit_build "$tmp" "$d/syn/holzcloud-f" "t34: F, a migration that succeeds and one that fails part-way"
+  ) || die "rb: the synthetic build F failed"
+}
+
+# ---------------------------------------------------------------------------
+# Stage rb: an update to a build whose migration fails part-way, the restart loop,
+# the previous binary on the half-migrated database, Rolling back block 1.
+# ---------------------------------------------------------------------------
+
+# Runs INSIDE the container as the service user (runuser -u holzcloud -- bash -s):
+# the schema level, the table list, the row counts of five tables and two content
+# hashes, through a read-only connection to the live database (the service may be
+# running, and the immutable URI would ignore its -wal file). Never a holzcloud
+# subcommand, never a row of a credential table.
+read -r -d '' RB_STATE_SH << 'RB_STATE_EOF' || true
+set -eu
+db=/opt/holzcloud/data/holzcloud.sqlite
+q() { sqlite3 -readonly "$db" ".timeout 5000" "$1"; }
+echo "schema: $(q "select coalesce(max(version_id), 0) from goose_db_version where is_applied = 1")"
+echo "tables: $(q "select name from sqlite_master where type = 'table' and name not like 'sqlite_%' order by name" | tr '\n' ' ' | sed 's/ $//')"
+for t in pages users media orders plugins; do
+  echo "rows $t: $(q "select count(*) from $t")"
+done
+if [ "$(q "select count(*) from pages where slug = 'plugintest'")" = 1 ]; then
+  echo "page: $(q "select content_markdown from pages where slug = 'plugintest'" | sha256sum | cut -d' ' -f1)"
+else
+  echo "page: none"
+fi
+m=$(q "select website_id || '/' || filename from media order by id limit 1")
+if [ -n "$m" ] && [ -f "/opt/holzcloud/data/media/$m" ]; then
+  echo "media: $(sha256sum < "/opt/holzcloud/data/media/$m" | cut -d' ' -f1)"
+else
+  echo "media: none"
+fi
+RB_STATE_EOF
+
+# state_capture NAME FILE: RB_STATE_SH in that container into FILE.
+state_capture() {
+  safe_name "$1" || die "refusing container name $1"
+  printf '%s\n' "$RB_STATE_SH" | docker exec -i "$1" runuser -u holzcloud -- bash -s | tr -d '\r' > "$2" \
+    || die "the state capture failed in $1"
+  grep -q '^schema: [0-9]' "$2" || die "the state capture in $1 has no schema line"
+}
+
+# snapshot_names NAME: the pre-upgrade snapshot files of the data directory, in
+# name order, one per line.
+snapshot_names() {
+  dxc "$1" bash -c 'cd /opt/holzcloud/data && ls -1 | grep -E "^pre-upgrade-.*\.sqlite$" || true' | tr -d '\r'
+}
+
+# snapshot_levels NAME NAMES: "NAME:LEVEL ..." for the names, each level read
+# through the immutable URI.
+snapshot_levels() {
+  local n=$1 s out=""
+  for s in $2; do
+    out="$out $s:$(level_file "$n" "/opt/holzcloud/data/$s")"
+  done
+  printf '%s\n' "${out# }"
+}
+
+# unit_prop NAME PROP: one property of holzcloud.service.
+unit_prop() { dxc "$1" systemctl show -p "$2" --value holzcloud | tr -d '\r'; }
+
+# wait_start_window NAME: wait until the unit's last start is older than the
+# unit's StartLimitIntervalSec, so the starts of the install do not count against
+# the burst of the update that follows (on a server an update comes long after the
+# last start). A wait, not a reset: the unit is not touched. WAITED_S is set.
+WAITED_S=0
+wait_start_window() {
+  local n=$1 iv t now left
+  iv=$(sed -n 's/^StartLimitIntervalSec=\([0-9][0-9]*\)$/\1/p' deploy/holzcloud.service | head -n 1)
+  is_count "$iv" || die "deploy/holzcloud.service has no StartLimitIntervalSec in seconds"
+  t=$(dxc "$n" bash -c 'date -d "$(systemctl show -p ExecMainStartTimestamp --value holzcloud)" +%s' | tr -d '\r') || t=""
+  is_count "$t" || die "could not read the time of the unit's last start"
+  now=$(dxc "$n" date +%s | tr -d '\r')
+  left=$((t + iv + 2 - now))
+  WAITED_S=0
+  if [ "$left" -gt 0 ]; then
+    say "waiting ${left}s until the last start of the unit is older than StartLimitIntervalSec=$iv"
+    sleep "$left"
+    WAITED_S=$left
+  fi
+}
+
+# wait_failed NAME MAX: poll every two seconds, at most MAX seconds, until the unit
+# is failed and NRestarts has not changed for two polls; /healthz is probed on
+# each poll. Sets WF_STATE, WF_NRESTARTS, WF_RESULT, WF_HEALTHZ (never|answered)
+# and WF_WAITED.
+wait_failed() {
+  local n=$1 max=$2 i=0 st="" nr="" prev=x stable=0
+  WF_HEALTHZ=never
+  while [ "$i" -lt "$max" ]; do
+    if dxc "$n" curl -fsS --max-time 2 http://127.0.0.1:8080/healthz > /dev/null 2>&1; then
+      WF_HEALTHZ=answered
+    fi
+    st=$(unit_prop "$n" ActiveState)
+    nr=$(unit_prop "$n" NRestarts)
+    if [ "$st" = failed ] && [ "$nr" = "$prev" ]; then
+      stable=$((stable + 1))
+    else
+      stable=0
+    fi
+    prev=$nr
+    [ "$stable" -lt 2 ] || break
+    sleep 2
+    i=$((i + 2))
+  done
+  WF_STATE=$st
+  WF_NRESTARTS=$nr
+  WF_RESULT=$(unit_prop "$n" Result)
+  WF_WAITED=$i
+}
+
+# rb_update: B0 installed and seeded, s0, F built, the Updating blocks played to F.
+rb_update() {
+  local f=$1 d=$RB_OUT b0 fv b
+  run_sh "$RB_NAME" "$RB_OUT" build up install postinstall
+  : > "$f"
+  DEV_FILE=$RB_OUT/deviations-driver.lst
+  : > "$DEV_FILE"
+  stage_zips "$RB_NAME"
+  run_sh "$RB_NAME" "$RB_OUT" seed || die "rb: run.sh seed failed"
+  b0=$(migrations_at "$NEW_REF")
+  put "$f" B0-VERSION "$(dxc "$RB_NAME" bash -c 'curl -fsS --max-time 5 http://127.0.0.1:8080/readyz | jq -r .version' | tr -d '\r')"
+  put "$f" LEVEL-EXPECTED-B0 "$b0"
+  put "$f" LEVEL-EXPECTED-F "$((b0 + 2))"
+  state_capture "$RB_NAME" "$d/state-s0.lst"
+  grep -qx 'page: none' "$d/state-s0.lst" && die "rb: the seeded page plugintest is missing in s0"
+  grep -qx 'media: none' "$d/state-s0.lst" && die "rb: the uploaded image is missing in s0"
+
+  syn_build_rb "$d"
+  F_BIN=$d/syn/holzcloud-f
+  fv=$(info_of "$F_BIN" version)
+  put "$f" F-BUILD "$fv ($(info_of "$F_BIN" commit)) migrations $(info_of "$F_BIN" migrations) sha256 $(info_of "$F_BIN" sha256)"
+  [ "$(info_of "$F_BIN" migrations)" -eq "$((b0 + 2))" ] || die "rb: F does not carry two migrations more than this tree"
+  deviation "DEVIATION[synthetic-build]: the binary of this update is F ($fv), a throwaway build of this tree with two added migrations, $(printf '%05d' $((b0 + 1)))_t34_ok.sql (creates t34_ok) and $(printf '%05d' $((b0 + 2)))_t34_fail.sql (creates t34_half, then inserts into a table that does not exist), made in a scratch clone with one local commit and the Build line of the document, the clone deleted afterwards; nothing of it is committed or pushed. The Build line of Updating block 2 is skipped for it. Released binaries give no update whose migration fails part-way while the previous binary carries the schema guard"
+
+  wait_start_window "$RB_NAME"
+  put "$f" START-WINDOW-WAIT-S "$WAITED_S"
+
+  # No reset-failed before or during the update: the restart loop is the evidence.
+  RB_T0=$(dxc "$RB_NAME" date +%s | tr -d '\r')
+  : > "$d/rb-update.out"
+  for b in 1 2 3; do
+    play_block "$RB_NAME" "$d/rb-update.out" rb-update Updating "$b" "$F_BIN"
+  done
+  put "$f" UPDATE-CHECK-RC "$(nth_word 1 $PLAY_RCS)"
+}
+
+# rb_loop: the restart loop to its end, the journal of the update window, the
+# half-migrated database and the snapshots.
+rb_loop() {
+  local f=$1 d=$RB_OUT j wl paths names fv
+  wait_failed "$RB_NAME" 240
+  put "$f" NRESTARTS "$WF_NRESTARTS"
+  put "$f" RESULT "$WF_RESULT"
+  put "$f" ACTIVE-STATE "$WF_STATE"
+  put "$f" HEALTHZ-DURING-LOOP "$WF_HEALTHZ"
+  j=$d/rb-journal.txt
+  dxc "$RB_NAME" journalctl -u holzcloud --since "@$RB_T0" -o cat --no-pager | tr -d '\r' > "$j" || true
+  fv=$(info_of "$F_BIN" version)
+  put "$f" STARTS "$(grep -c "\"msg\":\"starting\",\"version\":\"$fv\"" "$j" || true)"
+  put "$f" JOURNAL-SNAPSHOT-WRITTEN "$(grep -c '"msg":"pre-upgrade snapshot written"' "$j" || true)"
+  put "$f" JOURNAL-SNAPSHOT-KEPT "$(grep -c '"msg":"pre-upgrade snapshot kept"' "$j" || true)"
+  put "$f" JOURNAL-MIGRATIONS-FAILED "$(grep -c '"msg":"migrations failed"' "$j" || true)"
+  put "$f" JOURNAL-RESTORE-WITH "$(grep -c '"msg":"restore with: ' "$j" || true)"
+  paths=$(restore_with_paths "$j")
+  put "$f" RESTORE-WITH-DISTINCT-PATHS "$(printf '%s\n' "$paths" | grep -c . || true)"
+  wl=$(grep '"msg":"pre-upgrade snapshot written"' "$j" | head -n 1)
+  if [ -n "$paths" ] && [ "$paths" = "$(json_str "$wl" path)" ]; then
+    put "$f" RESTORE-WITH-NAMES-WRITTEN yes
+  else
+    put "$f" RESTORE-WITH-NAMES-WRITTEN no
+  fi
+  put "$f" WRITTEN-PATH "$(json_str "$wl" path)"
+  put "$f" WRITTEN-LEVEL "$(json_num "$wl" level)"
+  put "$f" STOP-MESSAGE "$(json_err "$(grep '"msg":"migrations failed"' "$j" | head -n 1)")"
+  put "$f" APPLIED-BEFORE-FAILURE "$(applied_versions "$j")"
+  if grep -q 'Start request repeated too quickly' "$j"; then
+    put "$f" START-LIMIT-LINE yes
+  else
+    put "$f" START-LIMIT-LINE no
+  fi
+  put "$f" LEVEL-HALF "$(level_live "$RB_NAME")"
+  put "$f" MARKER-DURING "$(dxc "$RB_NAME" bash -c 'cat /opt/holzcloud/data/pre-upgrade.pending 2>/dev/null || echo absent' | tr -d '\r')"
+  names=$(snapshot_names "$RB_NAME")
+  put "$f" SNAPSHOTS-AFTER-LOOP "$(snapshot_levels "$RB_NAME" "$names")"
+  {
+    echo "the pre-upgrade snapshots after the restart loop, in name order, each with its level (immutable read):"
+    for s in $names; do
+      echo "/opt/holzcloud/data/$s level $(level_file "$RB_NAME" "/opt/holzcloud/data/$s")"
+    done
+  } > "$d/rb-snapshots.txt"
+}
+
+# rb_guard: SCENARIO[previous-on-half], the previous binary started on the
+# half-migrated database, which the document says not to do.
+rb_guard() {
+  local f=$1 d=$RB_OUT t1 g gl b0 want
+  scenario "SCENARIO[previous-on-half]: after the restart loop ended, systemctl reset-failed holzcloud, cp -p /opt/holzcloud/holzcloud.prev /opt/holzcloud/holzcloud and systemctl start holzcloud: the previous binary is started on the half-migrated database, which Rolling back says not to do, so that the record shows the schema guard refusing it"
+  deviation "DEVIATION[start-limit]: systemctl reset-failed holzcloud runs once outside the document, before the previous binary is started on the half-migrated database (SCENARIO[previous-on-half]); the restart loop of the failing update ran to its end without one, and the reset-failed of Rolling back block 1 is the document's own line"
+  t1=$(dxc "$RB_NAME" date +%s | tr -d '\r')
+  dxc "$RB_NAME" systemctl reset-failed holzcloud || die "rb: reset-failed failed"
+  dxc "$RB_NAME" cp -p /opt/holzcloud/holzcloud.prev /opt/holzcloud/holzcloud || die "rb: putting the previous binary in place failed"
+  dxc "$RB_NAME" systemctl start holzcloud || true
+  wait_failed "$RB_NAME" 240
+  put "$f" GUARD-HEALTHZ "$WF_HEALTHZ"
+  put "$f" GUARD-ACTIVE-STATE "$WF_STATE"
+  g=$d/rb-guard.txt
+  dxc "$RB_NAME" journalctl -u holzcloud --since "@$t1" -o cat --no-pager | tr -d '\r' > "$g" || true
+  gl=$(grep '"msg":"refusing to start: the database schema is newer than this binary"' "$g" | head -n 1)
+  put "$f" GUARD-STARTS "$(grep -c '"msg":"refusing to start: the database schema is newer than this binary"' "$g" || true)"
+  if [ -n "$gl" ]; then put "$f" GUARD-LINE yes; else put "$f" GUARD-LINE no; fi
+  put "$f" GUARD-DB-LEVEL "$(json_num "$gl" db_level)"
+  put "$f" GUARD-BINARY-LEVEL "$(json_num "$gl" binary_level)"
+  b0=$(migrations_at "$NEW_REF")
+  want=$(guard_sentence internal/db/schema_guard.go "$((b0 + 1))" "$b0") || want=""
+  if [ -n "$want" ] && grep -Fq "\"err\":\"$(json_escape "$want")\"}" "$g"; then
+    put "$f" GUARD-SENTENCE yes
+  else
+    put "$f" GUARD-SENTENCE no
+  fi
+}
+
+# rb_rollback: Rolling back block 1 as written, then the state after it.
+rb_rollback() {
+  local f=$1 d=$RB_OUT nf
+  : > "$d/rb-rollback.out"
+  play_block "$RB_NAME" "$d/rb-rollback.out" rb-rollback "Rolling back" 1 ""
+  put "$f" ROLLBACK-RC "$PLAY_RCS"
+  set -- $PLAY_FILES
+  nf=$#
+  [ "$nf" -ge 2 ] || die "rb: Rolling back block 1 has fewer than two lines"
+  put "$f" ROLLBACK-READYZ "$(readyz_of "$(nth_word $((nf - 1)) $PLAY_FILES)")"
+  put "$f" ROLLBACK-CHECK-LINE "$(play_text "$(nth_word "$nf" $PLAY_FILES)" | tail -n 1)"
+
+  state_capture "$RB_NAME" "$d/state-s2.lst"
+  put "$f" LEVEL-AFTER-ROLLBACK "$(level_live "$RB_NAME")"
+  if [ "$(dxc "$RB_NAME" runuser -u holzcloud -- sqlite3 -readonly /opt/holzcloud/data/holzcloud.sqlite ".timeout 5000" \
+    "select count(*) from sqlite_master where type = 'table' and name = 't34_ok'" | tr -d '\r')" = 0 ]; then
+    put "$f" T34-OK-TABLE absent
+  else
+    put "$f" T34-OK-TABLE present
+  fi
+  put "$f" AFTER-UPDATE-LEVEL "$(level_file "$RB_NAME" /opt/holzcloud/data/holzcloud.sqlite.after-update)"
+  if dxc "$RB_NAME" test -e /opt/holzcloud/data/pre-upgrade.pending; then
+    put "$f" MARKER-AFTER present
+  else
+    put "$f" MARKER-AFTER absent
+  fi
+  {
+    echo "s0, before the update (B0 running, seeded):"
+    sed 's/^/s0 /' "$d/state-s0.lst"
+    echo "s2, after Rolling back block 1:"
+    sed 's/^/s2 /' "$d/state-s2.lst"
+    echo "comparison line by line:"
+    compare_state "$d/state-s0.lst" "$d/state-s2.lst"
+  } > "$d/rb-state.txt"
+  put "$f" COMPARE-S0-S2 "$(compare_state "$d/state-s0.lst" "$d/state-s2.lst" | tail -n 1)"
+}
+
+stage_rb() {
+  local f=$RB_OUT/rb.txt
+  rb_update "$f"
+  rb_loop "$f"
+  rb_guard "$f"
+  rb_rollback "$f"
+  printf 'UPD-02 %s\n' "$(verdict_upd02 "$f")" >> "$f"
+}
+
+# scenario TEXT: a step the driver takes that the document must not contain, in
+# the stage's deviations (run.sh's vocabulary).
+scenario() {
+  say "$*"
+  [ -n "$DEV_FILE" ] || die "scenario before a stage directory exists: $*"
+  printf '%s\n' "$*" >> "$DEV_FILE"
+}
+
+# stage_deviations DIR: deviations.txt of a stage directory, the driver's own lines
+# first (DEVIATION and SCENARIO), then those run.sh wrote; a line that occurs twice
+# is kept once.
+stage_deviations() {
+  local d=$1 arch
+  arch=$(docker info --format '{{.Architecture}}')
+  case "$arch" in
+    x86_64 | amd64) ;;
+    *) deviation "DEVIATION[emulation]: the Docker host is $arch; the linux/amd64 container runs under emulation, so every wall time of this set (the restarts of the unit among them) is an emulation figure, not a server's" ;;
+  esac
+  [ ! -f "$d/deviations.txt" ] || mv "$d/deviations.txt" "$d/deviations-runsh.lst"
+  cat "$d/deviations-driver.lst" "$d/deviations-runsh.lst" 2> /dev/null \
+    | awk '/^(DEVIATION|SCENARIO)\[/ && !seen[$0]++' > "$d/deviations.txt"
+}
+
+# stage_versions DIR NAME BINS...: run.sh's versions.txt of DIR (written by `up`),
+# then the host, the container, the binaries of the stage and the commits.
+stage_versions() {
+  local d=$1 n=$2 b
+  shift 2
+  {
+    echo "host uname -m:         $(uname -m)"
+    echo "container uname -m:    $(dxc "$n" uname -m | tr -d '\r')"
+    echo "container systemctl:   $(dxc "$n" systemctl --version | head -n 1 | tr -d '\r')"
+    echo "running binary:        $(dxc "$n" /opt/holzcloud/holzcloud version | head -n 1 | tr -d '\r')"
+    for b in "$@"; do
+      echo "$(basename "$b"):  $(info_of "$b" version) ($(info_of "$b" commit)) migrations $(info_of "$b" migrations) sha256 $(info_of "$b" sha256)"
+    done
+    echo "NEW_REF:               $NEW_REF"
+    echo "evidence commit:       $(cat "$EVIDENCE_FILE")"
+  } >> "$d/versions.txt"
+}
+
+# head_binary: the version line of the HEAD build, from a container that runs it
+# (the update chain ends on a synthetic build, so its container is not asked),
+# else from the .info run.sh's bins wrote for it.
 head_binary() {
-  local n v
-  for n in "$MIG_TGT" "$UPD_NAME" "$RB_NAME"; do
+  local n v i
+  for n in "$MIG_TGT" "$RB_NAME"; do
     if docker container inspect "$n" > /dev/null 2>&1; then
       v=$(dxc "$n" /opt/holzcloud/holzcloud version 2> /dev/null | head -n 1 | tr -d '\r') || v=""
       if [ -n "$v" ]; then
@@ -715,6 +1443,11 @@ head_binary() {
       fi
     fi
   done
+  i=deploy/test/out/bin/holzcloud-new-$NEW_REF.info
+  if [ -f "$i" ]; then
+    printf 'holzcloud %s (%s)\n' "$(sed -n 's/^describe: *//p' "$i" | head -n 1)" "$(sed -n 's/^commit: *//p' "$i" | head -n 1)"
+    return 0
+  fi
   echo "?"
 }
 
@@ -725,6 +1458,9 @@ write_summary() {
   if stage_wanted mig; then
     m1=$(verdict_mig01 "$MIG_SRC_OUT/mig.txt")
     m2=$(verdict_mig02 "$MIG_SRC_OUT/mig.txt")
+  fi
+  if stage_wanted rb; then
+    u2=$(verdict_upd02 "$RB_OUT/rb.txt")
   fi
   kinds=$(for d in "$MIG_SRC_OUT" "$UPD_OUT" "$RB_OUT"; do
     [ ! -f "$d/deviations.txt" ] || cat "$d/deviations.txt"
@@ -752,6 +1488,11 @@ run_body() {
     mig_versions
     mig_deviations
   fi
+  if stage_wanted rb; then
+    stage_rb
+    stage_versions "$RB_OUT" "$RB_NAME" "$RB_OUT/syn/holzcloud-f"
+    stage_deviations "$RB_OUT"
+  fi
   write_summary
   grep -Eq '^(MIG|UPD)-0[0-9] (FAIL|NOT-RUN)$' "$SUMMARY_FILE" && return 1
   return 0
@@ -763,12 +1504,10 @@ cmd_run() {
     say "upgrade-verify.sh: STAGES '$STAGES' must name mig, upd or rb"
     exit 2
   }
-  for p in upd rb; do
-    if stage_wanted "$p"; then
-      say "upgrade-verify.sh: the stage $p is added by plan 34-04; run STAGES=mig until then"
-      exit 2
-    fi
-  done
+  if stage_wanted upd; then
+    say "upgrade-verify.sh: the stage upd is added by plan 34-04, task 2; run STAGES='mig rb' until then"
+    exit 2
+  fi
   [ "$PLATFORM" = linux/amd64 ] || {
     say "upgrade-verify.sh: PLATFORM must be linux/amd64 (got '$PLATFORM')"
     exit 2
@@ -1415,6 +2154,250 @@ selftest_appendix() {
   st_eq "appendix: no stage" 2 "$(rc_of cmd_appendix "")"
 }
 
+# fx_doc FILE: a document with two ## sections, bash and text blocks, a ###
+# subsection, a comment and a continued line.
+fx_doc() {
+  {
+    echo '# Title'
+    echo
+    echo '## Updating'
+    echo
+    echo 'Text.'
+    echo
+    echo '```bash'
+    echo 'sudo cp a b'
+    echo '# a comment'
+    echo
+    echo '/opt/x version \'
+    echo '  --flag'
+    echo '```'
+    echo
+    echo '```bash'
+    echo 'scp holzcloud user@your-server:'
+    echo '```'
+    echo
+    echo '```text'
+    echo 'not bash'
+    echo '```'
+    echo
+    echo '### Sub'
+    echo
+    echo '```bash'
+    echo 'third'
+    echo '```'
+    echo
+    echo '## Rolling back'
+    echo
+    echo '```bash'
+    echo 'only one'
+    echo '```'
+    echo
+    echo '## Updating later'
+    echo
+    echo '```bash'
+    echo 'not this one'
+    echo '```'
+  } > "$1"
+}
+
+selftest_doc_block() {
+  local d=$ST_TMP/doc.md
+  fx_doc "$d"
+  st_ans "doc_block: Updating block 1, comment dropped, continuation joined" "$(printf 'sudo cp a b\n/opt/x version --flag')" doc_block "$d" Updating 1
+  st_ans "doc_block: Updating block 2" "scp holzcloud user@your-server:" doc_block "$d" Updating 2
+  st_ans "doc_block: a text block is no bash block, a ### subsection belongs to the section" "third" doc_block "$d" Updating 3
+  st_ans "doc_block: Updating has no block 4" ERROR doc_block "$d" Updating 4
+  st_ans "doc_block: Rolling back block 1" "only one" doc_block "$d" "Rolling back" 1
+  st_ans "doc_block: Rolling back has no block 2" ERROR doc_block "$d" "Rolling back" 2
+  st_ans "doc_block: no such section" ERROR doc_block "$d" Recovery 1
+  st_ans "doc_block: a heading that only begins with the name" ERROR doc_block "$d" Updat 1
+  st_ans "doc_block: block 0" ERROR doc_block "$d" Updating 0
+  st_ans "doc_block: block x" ERROR doc_block "$d" Updating x
+  st_ans "doc_block: no document" ERROR doc_block "$ST_TMP/absent.md" Updating 1
+  # The real document: the blocks the stages play exist and have the expected shape.
+  st_eq "doc_block: DEPLOY.md Build block 1 is one go build line" "1 yes" \
+    "$(doc_block "$DEPLOY_DOC" Build 1 | wc -l | tr -d ' ') $(doc_block "$DEPLOY_DOC" Build 1 | grep -q 'go build' && echo yes)"
+  st_ok "doc_block: DEPLOY.md Updating block 3" doc_block "$DEPLOY_DOC" Updating 3
+  st_has "doc_block: DEPLOY.md Rolling back block 1 resets the start limit" "sudo systemctl reset-failed holzcloud" "$(doc_block "$DEPLOY_DOC" "Rolling back" 1)"
+}
+
+selftest_play_kind() {
+  local l
+  st_ans "play_kind: the binary to the home directory" scp-binary play_kind "scp holzcloud user@your-server:"
+  st_ans "play_kind: the binary to a directory" scp-binary play_kind "scp holzcloud user@your-server:/home/u/"
+  st_ans "play_kind: two files of deploy/" scp-files play_kind "scp deploy/backup.sh deploy/restore.sh user@your-server:"
+  st_ans "play_kind: the Build line" build play_kind 'CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" ./cmd/holzcloud'
+  st_ans "play_kind: a server line" run play_kind "sudo systemctl stop holzcloud"
+  st_ans "play_kind: a pipeline" run play_kind "curl -fsS http://127.0.0.1:8080/readyz | jq '{status}'"
+  for l in "scp -r deploy/ user@your-server:/opt/holzcloud/" "scp deploy/test/run.sh user@x:" "scp holzcloud" \
+    "scp holzcloud.prev user@x:" "scp /etc/passwd user@x:" "scp deploy/ user@x:" "scp holzcloud user@x" \
+    "sudo cp <snapshot> /opt/holzcloud/data/holzcloud.sqlite" ""; do
+    st_ans "play_kind: refuses '$l'" ERROR play_kind "$l"
+  done
+}
+
+selftest_restore_with() {
+  local j=$ST_TMP/rw.txt
+  {
+    echo '{"time":"t","level":"INFO","msg":"pre-upgrade snapshot written","path":"/d/pre-upgrade-f-20261121-120000.sqlite","level":69}'
+    echo '{"time":"t","level":"ERROR","msg":"restore with: systemctl stop holzcloud && cp /d/pre-upgrade-f-20261121-120000.sqlite /d/holzcloud.sqlite && systemctl start holzcloud"}'
+    echo '{"time":"t","level":"WARN","msg":"pre-upgrade snapshot kept","path":"/d/pre-upgrade-f-20261121-120000.sqlite","level":69,"db_level":70}'
+    echo '{"time":"t","level":"ERROR","msg":"restore with: systemctl stop holzcloud && cp /d/pre-upgrade-f-20261121-120000.sqlite /d/holzcloud.sqlite && systemctl start holzcloud"}'
+    echo '{"time":"t","level":"ERROR","msg":"restore with: systemctl stop holzcloud && cp /d/pre-upgrade-f-20261121-120007.sqlite /d/holzcloud.sqlite && systemctl start holzcloud"}'
+    echo 'restore with: systemctl stop holzcloud && cp /d/not-json.sqlite /d/holzcloud.sqlite'
+  } > "$j"
+  st_ans "restore_with_paths: distinct paths in order, an escaped && too, a line that is no JSON ignored" \
+    "$(printf '/d/pre-upgrade-f-20261121-120000.sqlite\n/d/pre-upgrade-f-20261121-120007.sqlite')" restore_with_paths "$j"
+  : > "$j"
+  st_ans "restore_with_paths: none" "" restore_with_paths "$j"
+  st_ans "restore_with_paths: no file" ERROR restore_with_paths "$ST_TMP/absent.txt"
+}
+
+selftest_json() {
+  local l='{"time":"t","level":"ERROR","msg":"refusing to start: the database schema is newer than this binary","db_level":70,"binary_level":69,"err":"the database is at level 70: see \"Rolling back\""}'
+  st_ans "json_num: db_level" 70 json_num "$l" db_level
+  st_ans "json_num: binary_level" 69 json_num "$l" binary_level
+  st_ans "json_num: level is a text here" "" json_num "$l" level
+  st_ans "json_err: the err of the line, escapes kept" 'the database is at level 70: see \"Rolling back\"' json_err "$l"
+  st_ans "json_err: no err" "" json_err '{"msg":"x"}'
+  st_ans "json_str: msg" "refusing to start: the database schema is newer than this binary" json_str "$l" msg
+  st_ans "json_str: a path" "/d/x.sqlite" json_str '{"msg":"pre-upgrade snapshot written","path":"/d/x.sqlite","level":69}' path
+}
+
+selftest_guard_sentence() {
+  local g=$ST_TMP/guard.go s
+  {
+    echo 'func (e *NewerSchemaError) Error() string {'
+    echo '	return fmt.Sprintf("level %d, up to %d: "+'
+    echo '		"see \"Rolling back\" "+'
+    echo '		"and stop",'
+    echo '		e.DBLevel, e.BinaryLevel)'
+    echo '}'
+  } > "$g"
+  st_ans "guard_sentence: the pieces joined, the levels put in" 'level 70, up to 69: see "Rolling back" and stop' guard_sentence "$g" 70 69
+  st_ans "guard_sentence: no file" ERROR guard_sentence "$ST_TMP/absent.go" 70 69
+  printf 'package db\n' > "$g"
+  st_ans "guard_sentence: no Sprintf" ERROR guard_sentence "$g" 70 69
+  s=$(guard_sentence internal/db/schema_guard.go 70 69) || s=""
+  st_has "guard_sentence: schema_guard.go, its start" "the database is at migration level 70, and this binary knows migrations up to 69: a newer holzcloud has migrated it" "$s"
+  st_has "guard_sentence: schema_guard.go, its end" 'as deploy/DEPLOY.md describes under "Rolling back"' "$s"
+  st_ans "json_escape: quotes and backslashes" 'a \"b\" c\\d' json_escape 'a "b" c\d'
+}
+
+selftest_compare_state() {
+  local a=$ST_TMP/s0 b=$ST_TMP/s2 out
+  printf 'schema: 69\ntables: a b\nrows pages: 1\n' > "$a"
+  cp "$a" "$b"
+  st_eq "compare_state: equal" "bad=0" "$(compare_state "$a" "$b" | tail -n 1)"
+  printf 'schema: 69\ntables: a b t34_ok\nrows pages: 1\n' > "$b"
+  out=$(compare_state "$a" "$b")
+  st_eq "compare_state: one line differs" "bad=1" "$(printf '%s\n' "$out" | tail -n 1)"
+  st_has "compare_state: the differing line is named" "tables: a b t34_ok" "$out"
+  printf 'schema: 69\ntables: a b\n' > "$b"
+  st_eq "compare_state: a line missing" "bad=1" "$(compare_state "$a" "$b" | tail -n 1)"
+  printf 'schema: 69\ntables: a b\nrows pages: 1\nrows users: 2\n' > "$b"
+  st_eq "compare_state: a line more" "bad=1" "$(compare_state "$a" "$b" | tail -n 1)"
+  : > "$a"
+  : > "$b"
+  st_eq "compare_state: two empty states are no state" "bad=1" "$(compare_state "$a" "$b" | tail -n 1)"
+}
+
+# fx_rb FILE [KEY VALUE]: every key of rb.txt, all good; with KEY and VALUE, that
+# one line replaced (or removed for "-").
+fx_rb() {
+  local f=$1
+  {
+    echo "B0-VERSION: v0.1.4-245-ga44208a"
+    echo "LEVEL-EXPECTED-B0: 69"
+    echo "LEVEL-EXPECTED-F: 71"
+    echo "F-BUILD: v0.1.4-246-g1234567 (1234567) migrations 71 sha256 abc"
+    echo "START-WINDOW-WAIT-S: 120"
+    echo "UPDATE-CHECK-RC: 7"
+    echo "STARTS: 5"
+    echo "NRESTARTS: 4"
+    echo "RESULT: start-limit-hit"
+    echo "ACTIVE-STATE: failed"
+    echo "JOURNAL-SNAPSHOT-WRITTEN: 1"
+    echo "JOURNAL-SNAPSHOT-KEPT: 4"
+    echo "JOURNAL-MIGRATIONS-FAILED: 5"
+    echo "JOURNAL-RESTORE-WITH: 5"
+    echo "RESTORE-WITH-DISTINCT-PATHS: 1"
+    echo "RESTORE-WITH-NAMES-WRITTEN: yes"
+    echo "STOP-MESSAGE: goose up: partial migration error (type:sql,version:71): SQL logic error: no such table: t34_no_such_table (1)"
+    echo "APPLIED-BEFORE-FAILURE: 70"
+    echo "START-LIMIT-LINE: yes"
+    echo "LEVEL-HALF: 70"
+    echo "SNAPSHOTS-AFTER-LOOP: pre-upgrade-a-20261121-110000.sqlite:0 pre-upgrade-b-20261121-120000.sqlite:69"
+    echo "GUARD-LINE: yes"
+    echo "GUARD-DB-LEVEL: 70"
+    echo "GUARD-BINARY-LEVEL: 69"
+    echo "GUARD-SENTENCE: yes"
+    echo "ROLLBACK-RC: 0 0 0 0 0 0 0 0 0 0 0"
+    echo 'ROLLBACK-READYZ: {"status":"ok","version":"v0.1.4-245-ga44208a","commit":"a44208a","integrity":"ok"}'
+    echo "ROLLBACK-CHECK-LINE: no migration, no snapshot"
+    echo "LEVEL-AFTER-ROLLBACK: 69"
+    echo "T34-OK-TABLE: absent"
+    echo "AFTER-UPDATE-LEVEL: 70"
+    echo "MARKER-AFTER: absent"
+    echo "COMPARE-S0-S2: bad=0"
+  } > "$f"
+  if [ -n "${2:-}" ]; then fx_set "$f" "$2" "${3:-}"; fi
+}
+
+selftest_verdict_upd02() {
+  local f=$ST_TMP/rb.txt kv
+  st_ans "verdict_upd02: no file" NOT-RUN verdict_upd02 "$ST_TMP/absent.txt"
+  fx_rb "$f"
+  st_ans "verdict_upd02: every key good" PASS verdict_upd02 "$f"
+  for kv in "B0-VERSION|" "B0-VERSION|-" "LEVEL-EXPECTED-B0|-" "LEVEL-EXPECTED-B0|x" "LEVEL-EXPECTED-F|72" "LEVEL-EXPECTED-F|-" \
+    "UPDATE-CHECK-RC|0" "UPDATE-CHECK-RC|-" "STARTS|1" "STARTS|4" "STARTS|-" \
+    "JOURNAL-SNAPSHOT-WRITTEN|0" "JOURNAL-SNAPSHOT-WRITTEN|2" "JOURNAL-SNAPSHOT-WRITTEN|-" \
+    "JOURNAL-SNAPSHOT-KEPT|5" "JOURNAL-SNAPSHOT-KEPT|3" "JOURNAL-SNAPSHOT-KEPT|-" \
+    "JOURNAL-MIGRATIONS-FAILED|4" "JOURNAL-MIGRATIONS-FAILED|-" "JOURNAL-RESTORE-WITH|4" "JOURNAL-RESTORE-WITH|-" \
+    "RESTORE-WITH-DISTINCT-PATHS|0" "RESTORE-WITH-DISTINCT-PATHS|2" "RESTORE-WITH-DISTINCT-PATHS|-" \
+    "RESTORE-WITH-NAMES-WRITTEN|no" "RESTORE-WITH-NAMES-WRITTEN|-" \
+    "STOP-MESSAGE|goose up: partial migration error (type:sql,version:70): x" "STOP-MESSAGE|goose up: version:71) failed" "STOP-MESSAGE|-" \
+    "APPLIED-BEFORE-FAILURE|" "APPLIED-BEFORE-FAILURE|70 71" "APPLIED-BEFORE-FAILURE|-" \
+    "LEVEL-HALF|69" "LEVEL-HALF|71" "LEVEL-HALF|?" "LEVEL-HALF|-" \
+    "GUARD-LINE|no" "GUARD-LINE|-" "GUARD-DB-LEVEL|71" "GUARD-DB-LEVEL|-" "GUARD-BINARY-LEVEL|70" "GUARD-BINARY-LEVEL|-" \
+    "GUARD-SENTENCE|no" "GUARD-SENTENCE|-" \
+    "ROLLBACK-RC|0 0 1 0" "ROLLBACK-RC|" "ROLLBACK-RC|0 x" "ROLLBACK-RC|-" \
+    'ROLLBACK-READYZ|{"status":"ok","version":"v0.1.4-246-g1234567","commit":"1234567","integrity":"ok"}' \
+    'ROLLBACK-READYZ|{"status":"degraded","version":"v0.1.4-245-ga44208a","commit":"a44208a","integrity":"ok"}' \
+    'ROLLBACK-READYZ|{"status":"ok","version":"v0.1.4-245-ga44208a","commit":"a44208a","integrity":"failed"}' \
+    'ROLLBACK-READYZ|{"status":"ok","version":"v0.1.4-245-ga44208a-dirty","commit":"a44208a","integrity":"ok"}' \
+    "ROLLBACK-READYZ|" "ROLLBACK-READYZ|-" \
+    "ROLLBACK-CHECK-LINE|pre-upgrade snapshot written" "ROLLBACK-CHECK-LINE|-" \
+    "LEVEL-AFTER-ROLLBACK|70" "LEVEL-AFTER-ROLLBACK|-" "T34-OK-TABLE|present" "T34-OK-TABLE|-" \
+    "AFTER-UPDATE-LEVEL|69" "AFTER-UPDATE-LEVEL|71" "AFTER-UPDATE-LEVEL|-" "MARKER-AFTER|present" "MARKER-AFTER|-" \
+    "COMPARE-S0-S2|bad=1" "COMPARE-S0-S2|bad=" "COMPARE-S0-S2|-"; do
+    fx_rb "$f" "${kv%%|*}" "${kv#*|}"
+    st_ans "verdict_upd02: ${kv%%|*} '${kv#*|}'" FAIL verdict_upd02 "$f"
+  done
+  fx_rb "$f"
+  echo "GUARD-LINE: yes" >> "$f"
+  st_ans "verdict_upd02: a key twice" FAIL verdict_upd02 "$f"
+  # A shorter loop with counts that agree passes: the verdict reads the counts, not a typed five.
+  fx_rb "$f" STARTS 3
+  fx_set "$f" JOURNAL-SNAPSHOT-KEPT 2
+  fx_set "$f" JOURNAL-MIGRATIONS-FAILED 3
+  fx_set "$f" JOURNAL-RESTORE-WITH 3
+  st_ans "verdict_upd02: three starts that agree" PASS verdict_upd02 "$f"
+  # Other levels, all from the counts: B0 at 67, F at 69.
+  fx_rb "$f" LEVEL-EXPECTED-B0 67
+  fx_set "$f" LEVEL-EXPECTED-F 69
+  fx_set "$f" STOP-MESSAGE "goose up: partial migration error (type:sql,version:69): x"
+  fx_set "$f" APPLIED-BEFORE-FAILURE 68
+  fx_set "$f" LEVEL-HALF 68
+  fx_set "$f" GUARD-DB-LEVEL 68
+  fx_set "$f" GUARD-BINARY-LEVEL 67
+  fx_set "$f" LEVEL-AFTER-ROLLBACK 67
+  fx_set "$f" AFTER-UPDATE-LEVEL 68
+  st_ans "verdict_upd02: levels 67 and 69" PASS verdict_upd02 "$f"
+  fx_set "$f" GUARD-BINARY-LEVEL 69
+  st_ans "verdict_upd02: levels 67 and 69, a typed 69 for the binary" FAIL verdict_upd02 "$f"
+}
+
 cmd_selftest() {
   ST_N=0
   ST_BAD=0
@@ -1428,6 +2411,13 @@ cmd_selftest() {
   selftest_applied
   selftest_record
   selftest_appendix
+  selftest_doc_block
+  selftest_play_kind
+  selftest_restore_with
+  selftest_json
+  selftest_guard_sentence
+  selftest_compare_state
+  selftest_verdict_upd02
   if [ "$ST_BAD" -ne 0 ]; then
     echo "SELFTEST FAILED: $ST_BAD of $ST_N cases"
     exit 1
