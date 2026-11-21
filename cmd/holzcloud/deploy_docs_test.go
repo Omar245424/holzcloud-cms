@@ -249,6 +249,40 @@ func TestDeploySaysSubcommandsSnapshotBeforeTheyMigrate(t *testing.T) {
 	}
 }
 
+// TestDeployNamesTheWayBackAfterAFailedMigrationByItsLevel: from 0.1.5 the
+// restarts after a failed migration write no further snapshot of the
+// half-migrated database (phase 34, F-1), so the snapshot before the update
+// stays the newest file and every "restore with:" line names it. Rolling back
+// names that snapshot by the migration level it holds and prints the level of
+// every snapshot in its first block; Updating and A failed migration say the
+// same. deploy/test/run.sh plays Rolling back by block index, so the section
+// keeps exactly two bash blocks.
+func TestDeployNamesTheWayBackAfterAFailedMigrationByItsLevel(t *testing.T) {
+	sectionContains(t, "## Rolling back",
+		"goose_db_version",
+		"restarts after a failed migration write no further snapshot",
+		"pre-upgrade snapshot kept")
+	sectionContains(t, "### A failed migration", "pre-upgrade snapshot kept")
+	sectionContains(t, "## Updating", "pre-upgrade.pending", "`level`")
+
+	section := deploySection(t, readDeploy(t, "DEPLOY.md"), "## Rolling back")
+	if n := strings.Count("\n"+section, "\n```bash\n"); n != 2 {
+		t.Errorf("Rolling back has %d bash blocks, want 2: deploy/test/run.sh plays the first and the second", n)
+	}
+	first := bashBlocks(strings.SplitN(section, "**2. The update wrote no snapshot**", 2)[0])
+	levelLine := false
+	for _, line := range first {
+		if strings.Contains(line, "goose_db_version") {
+			levelLine = strings.Contains(line, "immutable=1") &&
+				strings.Contains(line, "sudo -u holzcloud sqlite3") &&
+				strings.HasPrefix(line, "for ")
+		}
+	}
+	if !levelLine {
+		t.Error("the first block of Rolling back has no line that lists every snapshot with its level, as the service user, through the immutable URI")
+	}
+}
+
 // bashBlocks returns the lines inside the ```bash fences of section.
 func bashBlocks(section string) []string {
 	var out []string
