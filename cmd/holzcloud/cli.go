@@ -140,7 +140,9 @@ func openForCLISnapshot(snapshotFirst bool) (config.Config, *db.DB, error) {
 	if err := db.RunMigrations(database.Write); err != nil {
 		database.Close()
 		if snapshot != "" {
-			return cfg, nil, fmt.Errorf("migrations: %w (the database before them is in %s)", err, snapshot)
+			// Quoted like the service's "restore with:" line: the
+			// operator copies this path into a shell.
+			return cfg, nil, fmt.Errorf("migrations: %w (the database before them is in %s)", err, shellWord(snapshot))
 		}
 		return cfg, nil, fmt.Errorf("migrations: %w", err)
 	}

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -756,8 +757,7 @@ func openDatabase(cfg config.Config) (*db.DB, error) {
 	if err := db.RunMigrations(database.Write); err != nil {
 		slog.Error("migrations failed", "err", err)
 		if preUpgradeSnapshot != "" {
-			slog.Error("restore with: systemctl stop holzcloud && cp " +
-				preUpgradeSnapshot + " " + cfg.DBPath + " && systemctl start holzcloud")
+			slog.Error("restore with: " + restoreCommand(preUpgradeSnapshot, cfg.DBPath))
 		}
 		database.Close()
 		return nil, err
@@ -765,6 +765,47 @@ func openDatabase(cfg config.Config) (*db.DB, error) {
 	forgetPreUpgradeSnapshot(cfg)
 	return database, nil
 }
+
+// restoreCommand is the command the "restore with:" line hands an operator,
+// who pastes it as root: snapshot copied over the live database between a
+// stop and a start. Both paths go through shellWord, so a path that is not
+// plain reaches cp as one word and runs nothing.
+func restoreCommand(snapshot, dbPath string) string {
+	return "systemctl stop holzcloud && cp " + shellWord(snapshot) + " " + shellWord(dbPath) +
+		" && systemctl start holzcloud"
+}
+
+// plainShellWord is a word no POSIX shell splits, expands or treats as an
+// operator.
+var plainShellWord = regexp.MustCompile(`^[A-Za-z0-9_./+:,-]+$`)
+
+// shellWord returns s as one word of a shell line: bare when it is plain, so
+// the usual paths read as they always did, otherwise in single quotes with
+// every single quote in it closed, escaped and reopened.
+func shellWord(s string) string {
+	if plainShellWord.MatchString(s) {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// preUpgradeSnapshotStamp is the layout of the time in a snapshot's name.
+const preUpgradeSnapshotStamp = "20060102-150405"
+
+// preUpgradeSnapshotName is the base name of the snapshot written before an
+// update: the build's version and the time, to the second.
+func preUpgradeSnapshotName(version string, at time.Time) string {
+	return fmt.Sprintf("pre-upgrade-%s-%s.sqlite", version, at.UTC().Format(preUpgradeSnapshotStamp))
+}
+
+// preUpgradeSnapshotNameRE is the shape preUpgradeSnapshotName gives a name
+// with a version as git describe writes it (letters, digits and ._+-) and its
+// stamp. It is all the marker accepts: the name ends up in the "restore with:"
+// line, and a holzcloud-writable file whose name carries shell syntax must not
+// get there. A build stamped with any other version writes snapshots the
+// marker does not trust, so each of its restarts writes a fresh one, as
+// before the marker existed.
+var preUpgradeSnapshotNameRE = regexp.MustCompile(`^pre-upgrade-[0-9A-Za-z._+-]+-[0-9]{8}-[0-9]{6}\.sqlite$`)
 
 // preUpgradeMarker is the file in the data directory that names the snapshot
 // of a migration that has started and not finished: one line, the snapshot's
@@ -821,7 +862,7 @@ func snapshotBeforeMigrating(cfg config.Config, database *db.DB) (string, error)
 		return kept, nil
 	}
 
-	name := fmt.Sprintf("pre-upgrade-%s-%s.sqlite", Version, time.Now().UTC().Format("20060102-150405"))
+	name := preUpgradeSnapshotName(Version, time.Now())
 	snapshot, err := db.Backup(context.Background(), database, filepath.Join(cfg.DataDir, name))
 	if err != nil {
 		slog.Error("cannot snapshot before migrating", "err", err)
@@ -847,7 +888,8 @@ func snapshotBeforeMigrating(cfg config.Config, database *db.DB) (string, error)
 // pendingPreUpgradeSnapshot reads preUpgradeMarker and returns the path of the
 // snapshot it names and that snapshot's level. ok is false when there is no
 // marker or it is not one to trust: the name ends up in the "restore with:"
-// line an operator pastes as root, so it must be a bare snapshot name of a
+// line an operator pastes as root, so it must be a bare name of exactly the
+// shape the binary writes (preUpgradeSnapshotNameRE, no shell syntax), of a
 // regular file in the data directory, and the level a number.
 func pendingPreUpgradeSnapshot(dataDir string) (path string, level int64, ok bool) {
 	markerPath := filepath.Join(dataDir, preUpgradeMarker)
@@ -871,7 +913,7 @@ func pendingPreUpgradeSnapshot(dataDir string) (path string, level int64, ok boo
 	if strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") || filepath.Base(name) != name {
 		return ignore("the snapshot name is not a bare file name")
 	}
-	if match, _ := filepath.Match("pre-upgrade-*.sqlite", name); !match {
+	if !preUpgradeSnapshotNameRE.MatchString(name) {
 		return ignore("the name is not that of a pre-upgrade snapshot")
 	}
 	level, err = strconv.ParseInt(fields[1], 10, 64)

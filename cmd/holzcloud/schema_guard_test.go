@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -583,6 +584,68 @@ func TestAFinishedMigrationEndsTheKeptSnapshot(t *testing.T) {
 	}
 }
 
+// markerCase is a marker file's content and the files planted beside it.
+type markerCase struct {
+	marker string
+	plant  func(t *testing.T, dataDir string)
+}
+
+// plantedAs is a marker naming a regular file that exists in the data
+// directory, so only the name itself can be the reason to ignore it.
+func plantedAs(name string) markerCase {
+	return markerCase{
+		marker: name + " 0\n",
+		plant:  func(t *testing.T, dataDir string) { plantSnapshots(t, dataDir, name) },
+	}
+}
+
+// The marker accepts exactly the shape of name the binary writes, whatever
+// version string the build was stamped with.
+func TestTheSnapshotNameIsOneItsMarkerAccepts(t *testing.T) {
+	at := time.Date(2026, 11, 21, 11, 37, 3, 0, time.UTC)
+	for _, version := range []string{"dev", "v0.1.4", "v0.1.4-247-g6986c32", "v0.1.5-beta.1", "v0.1.4-dirty", "v1.0.0+build.7"} {
+		name := preUpgradeSnapshotName(version, at)
+		if !preUpgradeSnapshotNameRE.MatchString(name) {
+			t.Errorf("version %q: the name %q is not one the marker accepts", version, name)
+		}
+	}
+	if got, want := preUpgradeSnapshotName("v0.1.4", at), "pre-upgrade-v0.1.4-20261121-113703.sqlite"; got != want {
+		t.Errorf("name %q, want %q", got, want)
+	}
+}
+
+// The "restore with:" line and the CLI's error are pasted as root. A path of
+// plain characters stays as it was (the drivers and DEPLOY.md read that line);
+// anything else is quoted so the shell hands cp exactly that path.
+func TestTheRestoreLineQuotesWhatItCannotPassBare(t *testing.T) {
+	const snap, live = "/opt/holzcloud/data/pre-upgrade-v0.1.4-247-g6986c32-20261121-113703.sqlite", "/opt/holzcloud/data/holzcloud.sqlite"
+	if got, want := restoreCommand(snap, live),
+		"systemctl stop holzcloud && cp "+snap+" "+live+" && systemctl start holzcloud"; got != want {
+		t.Errorf("restoreCommand of plain paths:\n got %s\nwant %s", got, want)
+	}
+	for _, p := range []string{
+		"/d/pre-upgrade-x;touch pwned-20200301-000000.sqlite",
+		"/d/pre-upgrade-$(id)-20200301-000000.sqlite",
+		"/d/pre-upgrade-`id`-20200301-000000.sqlite",
+		"/d/pre-upgrade-a|sh-20200301-000000.sqlite",
+		"/d d/pre-upgrade-a'b\"c\\d&e*f?g~h-20200301-000000.sqlite",
+		"/d/${IFS}x",
+		"",
+	} {
+		word := shellWord(p)
+		out, err := exec.Command("sh", "-c", "printf '%s' "+word).CombinedOutput()
+		if err != nil {
+			t.Fatalf("sh on %s: %v (%s)", word, err, out)
+		}
+		if string(out) != p {
+			t.Errorf("the shell reads %s as %q, want %q", word, out, p)
+		}
+		if line := restoreCommand(p, live); !strings.Contains(line, " cp "+word+" ") {
+			t.Errorf("restoreCommand does not quote %q: %s", p, line)
+		}
+	}
+}
+
 // The marker is read back at every start and its name ends up in the
 // "restore with:" line an operator pastes as root, so a name that is not a
 // snapshot in the data directory, or a level that is not a number, is
@@ -590,10 +653,7 @@ func TestAFinishedMigrationEndsTheKeptSnapshot(t *testing.T) {
 func TestAMarkerThatNamesNoSnapshotIsIgnored(t *testing.T) {
 	highest := highestLevel(t)
 	const planted = "pre-upgrade-v0.1.4-20200301-000000.sqlite"
-	for name, c := range map[string]struct {
-		marker string
-		plant  func(t *testing.T, dataDir string)
-	}{
+	for name, c := range map[string]markerCase{
 		"missing file": {marker: planted + " 0\n"},
 		"slash": {
 			marker: "sub/" + planted + " 0\n",
@@ -623,6 +683,18 @@ func TestAMarkerThatNamesNoSnapshotIsIgnored(t *testing.T) {
 			marker: planted + "\n",
 			plant:  func(t *testing.T, dataDir string) { plantSnapshots(t, dataDir, planted) },
 		},
+		// The name is pasted as root in "restore with:", so a file whose
+		// name carries shell syntax is not trusted even when it exists and
+		// matches pre-upgrade-*.sqlite (CR-01 of the phase 34 review).
+		"semicolon":            plantedAs("pre-upgrade-x;touch${IFS}pwned-20200301-000000.sqlite"),
+		"command substitution": plantedAs("pre-upgrade-$(id)-20200301-000000.sqlite"),
+		"backtick":             plantedAs("pre-upgrade-`id`-20200301-000000.sqlite"),
+		"pipe":                 plantedAs("pre-upgrade-a|sh-20200301-000000.sqlite"),
+		"ampersand":            plantedAs("pre-upgrade-a&b-20200301-000000.sqlite"),
+		"single quote":         plantedAs("pre-upgrade-a'b-20200301-000000.sqlite"),
+		"space":                plantedAs("pre-upgrade-a b-20200301-000000.sqlite"),
+		"no time stamp":        plantedAs("pre-upgrade-v0.1.4.sqlite"),
+		"short time stamp":     plantedAs("pre-upgrade-v0.1.4-2020031-000000.sqlite"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			dataDir := filepath.Join(t.TempDir(), "data")
