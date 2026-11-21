@@ -466,7 +466,11 @@ kv_level() {
 # guard's sentence and both levels; Rolling back block 1 ran without a failing
 # line, the old version answers ok with integrity ok, the last line found nothing
 # to migrate, the database is at B0's level without F's table, the set-aside copy
-# at the half level, no marker left, and the state equals the one before.
+# at the half level, no marker left, and the state equals the one before. The
+# loop ran to its end (ACTIVE-STATE failed, systemd's start-limit line) without
+# /healthz ever answering, the snapshots after it hold the written one at B0's
+# level and none at the half level, and the previous binary's starts on the
+# half-migrated database ended failed without /healthz answering either.
 verdict_upd02() {
   local f=${1:-} b0 fl st rcs r rz bv
   if [ ! -f "$f" ]; then
@@ -500,7 +504,11 @@ verdict_upd02() {
       && kv_is "$f" ROLLBACK-CHECK-LINE "no migration, no snapshot" \
       && kv_level "$f" LEVEL-AFTER-ROLLBACK "$b0" && kv_is "$f" T34-OK-TABLE absent \
       && kv_level "$f" AFTER-UPDATE-LEVEL "$((b0 + 1))" && kv_is "$f" MARKER-AFTER absent \
-      && kv_is "$f" COMPARE-S0-S2 "bad=0"; then
+      && kv_is "$f" COMPARE-S0-S2 "bad=0" \
+      && kv_is "$f" ACTIVE-STATE failed && kv_is "$f" START-LIMIT-LINE yes \
+      && kv_is "$f" HEALTHZ-DURING-LOOP never \
+      && kv_is "$f" GUARD-HEALTHZ never && kv_is "$f" GUARD-ACTIVE-STATE failed \
+      && kv_level "$f" WRITTEN-LEVEL "$b0" && loop_snapshots_ok "$f" "$b0"; then
       for r in $rcs; do
         [ "$r" = 0 ] || {
           echo FAIL
@@ -512,6 +520,26 @@ verdict_upd02() {
     fi
   fi
   echo FAIL
+}
+
+# loop_snapshots_ok FILE B0: SNAPSHOTS-AFTER-LOOP (NAME:LEVEL words) holds
+# exactly one snapshot at B0's level, the one WRITTEN-PATH names, and none at the
+# half level B0 + 1: the restart loop wrote no snapshot of the half-migrated
+# database. Levels are compared as whole numbers, so 9 never matches 69.
+loop_snapshots_ok() {
+  local f=$1 b0=$2 w wp at0=0 at1=0 named=0
+  [ "$(kv_count "$f" SNAPSHOTS-AFTER-LOOP)" = 1 ] && [ "$(kv_count "$f" WRITTEN-PATH)" = 1 ] || return 1
+  wp=$(kv "$f" WRITTEN-PATH)
+  [ -n "$wp" ] || return 1
+  for w in $(kv "$f" SNAPSHOTS-AFTER-LOOP); do
+    if [ "${w##*:}" = "$b0" ]; then
+      at0=$((at0 + 1))
+      [ "${w%:*}" != "${wp##*/}" ] || named=1
+    elif [ "${w##*:}" = "$((b0 + 1))" ]; then
+      at1=$((at1 + 1))
+    fi
+  done
+  [ "$at0" -eq 1 ] && [ "$named" -eq 1 ] && [ "$at1" -eq 0 ]
 }
 
 # snap_stamp NAME: the UTC stamp at the end of a snapshot's name
@@ -2623,7 +2651,12 @@ fx_rb() {
     echo "APPLIED-BEFORE-FAILURE: 70"
     echo "START-LIMIT-LINE: yes"
     echo "LEVEL-HALF: 70"
+    echo "HEALTHZ-DURING-LOOP: never"
+    echo "WRITTEN-PATH: /opt/holzcloud/data/pre-upgrade-b-20261121-120000.sqlite"
+    echo "WRITTEN-LEVEL: 69"
     echo "SNAPSHOTS-AFTER-LOOP: pre-upgrade-a-20261121-110000.sqlite:0 pre-upgrade-b-20261121-120000.sqlite:69"
+    echo "GUARD-HEALTHZ: never"
+    echo "GUARD-ACTIVE-STATE: failed"
     echo "GUARD-LINE: yes"
     echo "GUARD-DB-LEVEL: 70"
     echo "GUARD-BINARY-LEVEL: 69"
@@ -2666,7 +2699,18 @@ selftest_verdict_upd02() {
     "ROLLBACK-CHECK-LINE|pre-upgrade snapshot written" "ROLLBACK-CHECK-LINE|-" \
     "LEVEL-AFTER-ROLLBACK|70" "LEVEL-AFTER-ROLLBACK|-" "T34-OK-TABLE|present" "T34-OK-TABLE|-" \
     "AFTER-UPDATE-LEVEL|69" "AFTER-UPDATE-LEVEL|71" "AFTER-UPDATE-LEVEL|-" "MARKER-AFTER|present" "MARKER-AFTER|-" \
-    "COMPARE-S0-S2|bad=1" "COMPARE-S0-S2|bad=" "COMPARE-S0-S2|-"; do
+    "COMPARE-S0-S2|bad=1" "COMPARE-S0-S2|bad=" "COMPARE-S0-S2|-" \
+    "ACTIVE-STATE|activating" "ACTIVE-STATE|active" "ACTIVE-STATE|" "ACTIVE-STATE|-" \
+    "START-LIMIT-LINE|no" "START-LIMIT-LINE|" "START-LIMIT-LINE|-" \
+    "HEALTHZ-DURING-LOOP|answered" "HEALTHZ-DURING-LOOP|" "HEALTHZ-DURING-LOOP|-" \
+    "GUARD-HEALTHZ|answered" "GUARD-HEALTHZ|" "GUARD-HEALTHZ|-" \
+    "GUARD-ACTIVE-STATE|activating" "GUARD-ACTIVE-STATE|" "GUARD-ACTIVE-STATE|-" \
+    "WRITTEN-LEVEL|70" "WRITTEN-LEVEL|" "WRITTEN-LEVEL|-" \
+    "WRITTEN-PATH|/opt/holzcloud/data/pre-upgrade-c-20261121-130000.sqlite" "WRITTEN-PATH|" "WRITTEN-PATH|-" \
+    "SNAPSHOTS-AFTER-LOOP|pre-upgrade-a-20261121-110000.sqlite:0 pre-upgrade-b-20261121-120000.sqlite:69 pre-upgrade-c-20261121-130000.sqlite:70" \
+    "SNAPSHOTS-AFTER-LOOP|pre-upgrade-a-20261121-110000.sqlite:0 pre-upgrade-b-20261121-120000.sqlite:69 pre-upgrade-c-20261121-130000.sqlite:69" \
+    "SNAPSHOTS-AFTER-LOOP|pre-upgrade-a-20261121-110000.sqlite:0 pre-upgrade-c-20261121-130000.sqlite:69" \
+    "SNAPSHOTS-AFTER-LOOP|pre-upgrade-a-20261121-110000.sqlite:0" "SNAPSHOTS-AFTER-LOOP|" "SNAPSHOTS-AFTER-LOOP|-"; do
     fx_rb "$f" "${kv%%|*}" "${kv#*|}"
     st_ans "verdict_upd02: ${kv%%|*} '${kv#*|}'" FAIL verdict_upd02 "$f"
   done
@@ -2689,6 +2733,8 @@ selftest_verdict_upd02() {
   fx_set "$f" GUARD-BINARY-LEVEL 67
   fx_set "$f" LEVEL-AFTER-ROLLBACK 67
   fx_set "$f" AFTER-UPDATE-LEVEL 68
+  fx_set "$f" WRITTEN-LEVEL 67
+  fx_set "$f" SNAPSHOTS-AFTER-LOOP "pre-upgrade-a-20261121-110000.sqlite:0 pre-upgrade-b-20261121-120000.sqlite:67"
   st_ans "verdict_upd02: levels 67 and 69" PASS verdict_upd02 "$f"
   fx_set "$f" GUARD-BINARY-LEVEL 69
   st_ans "verdict_upd02: levels 67 and 69, a typed 69 for the binary" FAIL verdict_upd02 "$f"
