@@ -660,10 +660,12 @@ appendix_print() {
 #    E/mac-t34-evidence-commit.txt, and no bound file nor cmd, internal, go.mod or
 #    go.sum differs between SHA and HEAD;
 #  - the tracked JavaScript is exactly the htmx file;
-#  - the pasted summary is not a rehearsal's; no line holds a private-key marker;
-#    leak_scan passes over the whole record outside the script block.
+#  - the pasted summary is not a rehearsal's and reads UAT-01, UAT-02 and UAT-03
+#    PASS, and the pasted mac-t34-pass1.status is exactly 0;
+#  - no line holds a private-key marker; leak_scan passes over the whole record
+#    outside the script block.
 t34_record_check() {
-  local r=${1:-} e=${2:-} n=0 k=0 tmp i name sha pinned p tok bf
+  local r=${1:-} e=${2:-} n=0 k=0 tmp i name sha pinned p tok bf v
   rc_bad() {
     k=$((k + 1))
     printf 'RECORD-CHECK BAD %s\n' "$*"
@@ -742,6 +744,26 @@ t34_record_check() {
   i=$(awk '$2 == "mac-t34-uat/summary.txt" { print $1; exit }' "$tmp/names")
   if [ -n "$i" ] && [ -f "$tmp/b$i" ] && grep -q '^REHEARSAL:' "$tmp/b$i"; then
     rc_bad "the pasted summary is a rehearsal's (REHEARSAL line)"
+  fi
+  # Nor is a failed set: UAT-01 to UAT-03 read PASS, once each, and the pasted
+  # status of the run is 0. Prose claiming PASS over an appendix that shows
+  # FAIL is what this refuses.
+  if [ -n "$i" ] && [ -f "$tmp/b$i" ]; then
+    for v in UAT-01 UAT-02 UAT-03; do
+      n=$((n + 1))
+      if [ "$(grep -c "^$v " "$tmp/b$i" || true)" != 1 ] || ! grep -qx "$v PASS" "$tmp/b$i"; then
+        rc_bad "the pasted summary does not read '$v PASS' exactly once"
+      fi
+    done
+  else
+    n=$((n + 1))
+    rc_bad "no pasted mac-t34-uat/summary.txt to read the verdicts from"
+  fi
+  n=$((n + 1))
+  i=$(awk '$2 == "mac-t34-pass1.status" { print $1; exit }' "$tmp/names")
+  printf '0\n' > "$tmp/zero"
+  if [ -z "$i" ] || [ ! -f "$tmp/b$i" ] || ! cmp -s "$tmp/zero" "$tmp/b$i"; then
+    rc_bad "the pasted mac-t34-pass1.status is not exactly the one line 0: the run did not end well"
   fi
   # No secret.
   n=$((n + 1))
@@ -1057,7 +1079,7 @@ fx_edit() {
 }
 
 selftest_record() {
-  local e=$ST_TMP/e r=$ST_TMP/RUN.md out marker
+  local e=$ST_TMP/e r=$ST_TMP/RUN.md out marker v
   fx_scratch "$e"
   fx_record "$e" "$r"
   out=$(t34_record_check "$r" "$e" 2>&1) || true
@@ -1132,6 +1154,38 @@ selftest_record() {
   printf 'UAT-01 PASS\nUAT-02 PASS\nUAT-03 PASS\nREHEARSAL: yes\n' > "$e/mac-t34-uat/summary.txt"
   fx_record "$e" "$r"
   st_eq "record-check: a rehearsal's summary" 1 "$(rc_of t34_record_check "$r" "$e")"
+  fx_scratch "$e"
+
+  # A failed set is never evidence either: each of the three verdicts, and the
+  # run's status (WR-02 of the phase 34 review).
+  for v in UAT-01 UAT-02 UAT-03; do
+    printf -- '---- summary ----\nUAT-01 PASS\nUAT-02 PASS\nUAT-03 PASS\n' | sed "s/^$v PASS\$/$v FAIL/" > "$e/mac-t34-uat/summary.txt"
+    fx_record "$e" "$r"
+    out=$(t34_record_check "$r" "$e" 2>&1) || true
+    st_eq "record-check: a FAIL summary ($v)" 1 "$(rc_of t34_record_check "$r" "$e")"
+    st_has "record-check: the failed verdict $v is named" "$v" "$out"
+  done
+  printf 'UAT-01 PASS\nUAT-02 NOT-RUN\nUAT-03 PASS\n' > "$e/mac-t34-uat/summary.txt"
+  fx_record "$e" "$r"
+  st_eq "record-check: a NOT-RUN verdict" 1 "$(rc_of t34_record_check "$r" "$e")"
+  printf 'UAT-01 PASS\nUAT-03 PASS\n' > "$e/mac-t34-uat/summary.txt"
+  fx_record "$e" "$r"
+  st_eq "record-check: a summary without one verdict line" 1 "$(rc_of t34_record_check "$r" "$e")"
+  printf 'UAT-01 PASS\nUAT-02 PASS\nUAT-02 FAIL\nUAT-03 PASS\n' > "$e/mac-t34-uat/summary.txt"
+  fx_record "$e" "$r"
+  st_eq "record-check: a summary with one verdict line twice" 1 "$(rc_of t34_record_check "$r" "$e")"
+  fx_scratch "$e"
+  printf '1\n' > "$e/mac-t34-pass1.status"
+  fx_record "$e" "$r"
+  out=$(t34_record_check "$r" "$e" 2>&1) || true
+  st_eq "record-check: status 1" 1 "$(rc_of t34_record_check "$r" "$e")"
+  st_has "record-check: the status is named" "mac-t34-pass1.status" "$out"
+  printf '0\n0\n' > "$e/mac-t34-pass1.status"
+  fx_record "$e" "$r"
+  st_eq "record-check: a status of two lines" 1 "$(rc_of t34_record_check "$r" "$e")"
+  : > "$e/mac-t34-pass1.status"
+  fx_record "$e" "$r"
+  st_eq "record-check: an empty status" 1 "$(rc_of t34_record_check "$r" "$e")"
   fx_scratch "$e"
 
   # A block missing for a file of the paste list.

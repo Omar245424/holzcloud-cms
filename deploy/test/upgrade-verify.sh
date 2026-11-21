@@ -1893,9 +1893,12 @@ appendix_print() {
 #  - exactly one line "Evidence commit: SHA"; SHA resolves, is the pinned commit of
 #    E/amd64-t34-evidence-commit.txt, and no bound file nor cmd, internal, go.mod or
 #    go.sum differs between SHA and HEAD;
-#  - the pasted summary is not a rehearsal's; no line holds a private-key marker.
+#  - the pasted summary is not a rehearsal's, reads PASS for the record's own
+#    verdicts (record_verdicts) and for every other verdict of the run, and the
+#    pasted amd64-t34-pass1.status is exactly 0;
+#  - no line holds a private-key marker.
 t34_record_check() {
-  local r=${1:-} e=${2:-} st=${3:-} n=0 k=0 tmp i name sha pinned p tok bf list
+  local r=${1:-} e=${2:-} st=${3:-} n=0 k=0 tmp i name sha pinned p tok bf list v
   rc_bad() {
     k=$((k + 1))
     printf 'RECORD-CHECK BAD %s\n' "$*"
@@ -1974,6 +1977,30 @@ t34_record_check() {
   if [ -n "$i" ] && [ -f "$tmp/b$i" ] && grep -q '^REHEARSAL:' "$tmp/b$i"; then
     rc_bad "the pasted summary is a rehearsal's (REHEARSAL line)"
   fi
+  # Nor is a failed set: the record's own verdicts read PASS, once each; no
+  # verdict of the run reads anything else; the pasted status of the run is 0.
+  # Prose claiming PASS over an appendix that shows FAIL is what this refuses.
+  if [ -n "$i" ] && [ -f "$tmp/b$i" ]; then
+    for v in $(record_verdicts "$st"); do
+      n=$((n + 1))
+      if [ "$(grep -c "^$v " "$tmp/b$i" || true)" != 1 ] || ! grep -qx "$v PASS" "$tmp/b$i"; then
+        rc_bad "the pasted summary does not read '$v PASS' exactly once"
+      fi
+    done
+    n=$((n + 1))
+    if awk '/^(MIG|UPD)-0[0-9] / && !/^(MIG|UPD)-0[0-9] PASS$/ { f = 1 } END { exit !f }' "$tmp/b$i"; then
+      rc_bad "the pasted summary holds a verdict that is not PASS: $(awk '/^(MIG|UPD)-0[0-9] / && !/^(MIG|UPD)-0[0-9] PASS$/' "$tmp/b$i" | tr '\n' ';' | sed 's/;$//')"
+    fi
+  else
+    n=$((n + 1))
+    rc_bad "no pasted amd64-t34-summary.txt to read the verdicts from"
+  fi
+  n=$((n + 1))
+  i=$(awk '$2 == "amd64-t34-pass1.status" { print $1; exit }' "$tmp/names")
+  printf '0\n' > "$tmp/zero"
+  if [ -z "$i" ] || [ ! -f "$tmp/b$i" ] || ! cmp -s "$tmp/zero" "$tmp/b$i"; then
+    rc_bad "the pasted amd64-t34-pass1.status is not exactly the one line 0: the run did not end well"
+  fi
   # No secret.
   n=$((n + 1))
   if grep -q 'PRIVATE KEY-----' "$r"; then
@@ -1985,6 +2012,16 @@ t34_record_check() {
     return 1
   fi
   echo "RECORD-CHECK OK ($n checks)"
+}
+
+# record_verdicts STAGE: the verdict lines the record of STAGE stands on.
+record_verdicts() {
+  case "${1:-}" in
+    mig) echo "MIG-01 MIG-02" ;;
+    upd) echo "UPD-01" ;;
+    rb) echo "UPD-02" ;;
+    *) return 1 ;;
+  esac
 }
 
 cmd_appendix() {
@@ -2306,6 +2343,54 @@ selftest_record() {
   printf 'MIG-01 PASS\nMIG-02 PASS\nREHEARSAL: yes\n' > "$e/amd64-t34-summary.txt"
   fx_record "$e" mig "$r"
   st_eq "record-check: a rehearsal's summary" 1 "$(rc_of t34_record_check "$r" "$e" mig)"
+  fx_scratch "$e" mig
+
+  # A failed set is never evidence either: the record's own verdicts, any other
+  # verdict of the run, and the run's status (WR-02 of the phase 34 review).
+  printf 'MIG-01 FAIL\nMIG-02 PASS\nUPD-01 PASS\nUPD-02 PASS\nSTAGES: mig upd rb\n' > "$e/amd64-t34-summary.txt"
+  fx_record "$e" mig "$r"
+  out=$(t34_record_check "$r" "$e" mig 2>&1) || true
+  st_eq "record-check: a FAIL summary (MIG-01 of a mig record)" 1 "$(rc_of t34_record_check "$r" "$e" mig)"
+  st_has "record-check: the failed verdict is named" "MIG-01" "$out"
+  printf 'MIG-01 PASS\nMIG-02 FAIL\nUPD-01 PASS\nUPD-02 PASS\nSTAGES: mig upd rb\n' > "$e/amd64-t34-summary.txt"
+  fx_record "$e" mig "$r"
+  st_eq "record-check: a FAIL summary (MIG-02 of a mig record)" 1 "$(rc_of t34_record_check "$r" "$e" mig)"
+  printf 'MIG-01 PASS\nMIG-02 PASS\nUPD-01 PASS\nUPD-02 FAIL\nSTAGES: mig upd rb\n' > "$e/amd64-t34-summary.txt"
+  fx_record "$e" mig "$r"
+  st_eq "record-check: a FAIL summary (UPD-02 of the same run, under a mig record)" 1 "$(rc_of t34_record_check "$r" "$e" mig)"
+  printf 'MIG-01 PASS\nMIG-02 PASS\nUPD-01 NOT-RUN\nUPD-02 PASS\nSTAGES: mig upd rb\n' > "$e/amd64-t34-summary.txt"
+  fx_record "$e" mig "$r"
+  st_eq "record-check: a NOT-RUN verdict in the summary" 1 "$(rc_of t34_record_check "$r" "$e" mig)"
+  printf 'MIG-01 PASS\nUPD-01 PASS\nUPD-02 PASS\nSTAGES: mig upd rb\n' > "$e/amd64-t34-summary.txt"
+  fx_record "$e" mig "$r"
+  st_eq "record-check: a summary without the record's verdict line" 1 "$(rc_of t34_record_check "$r" "$e" mig)"
+  printf 'MIG-01 PASS\nMIG-01 PASS\nMIG-02 PASS\nUPD-01 PASS\nUPD-02 PASS\nSTAGES: mig upd rb\n' > "$e/amd64-t34-summary.txt"
+  fx_record "$e" mig "$r"
+  st_eq "record-check: a summary with the record's verdict line twice" 1 "$(rc_of t34_record_check "$r" "$e" mig)"
+  fx_scratch "$e" mig
+  printf '1\n' > "$e/amd64-t34-pass1.status"
+  fx_record "$e" mig "$r"
+  out=$(t34_record_check "$r" "$e" mig 2>&1) || true
+  st_eq "record-check: status 1" 1 "$(rc_of t34_record_check "$r" "$e" mig)"
+  st_has "record-check: the status is named" "amd64-t34-pass1.status" "$out"
+  printf '0\n0\n' > "$e/amd64-t34-pass1.status"
+  fx_record "$e" mig "$r"
+  st_eq "record-check: a status of two lines" 1 "$(rc_of t34_record_check "$r" "$e" mig)"
+  : > "$e/amd64-t34-pass1.status"
+  fx_record "$e" mig "$r"
+  st_eq "record-check: an empty status" 1 "$(rc_of t34_record_check "$r" "$e" mig)"
+  fx_scratch "$e" upd
+  printf 'MIG-01 PASS\nMIG-02 PASS\nUPD-01 FAIL\nUPD-02 PASS\nSTAGES: mig upd rb\n' > "$e/amd64-t34-summary.txt"
+  fx_record "$e" upd "$r"
+  st_eq "record-check: a FAIL summary (UPD-01 of an upd record)" 1 "$(rc_of t34_record_check "$r" "$e" upd)"
+  fx_scratch "$e" rb
+  printf 'MIG-01 PASS\nMIG-02 PASS\nUPD-01 PASS\nUPD-02 FAIL\nSTAGES: mig upd rb\n' > "$e/amd64-t34-summary.txt"
+  fx_record "$e" rb "$r"
+  st_eq "record-check: a FAIL summary (UPD-02 of an rb record)" 1 "$(rc_of t34_record_check "$r" "$e" rb)"
+  fx_scratch "$e" rb
+  printf '1\n' > "$e/amd64-t34-pass1.status"
+  fx_record "$e" rb "$r"
+  st_eq "record-check: status 1 under an rb record" 1 "$(rc_of t34_record_check "$r" "$e" rb)"
   fx_scratch "$e" mig
 
   # A block missing for a file of the paste list.
