@@ -919,7 +919,7 @@ func forgetPreUpgradeSnapshot(cfg config.Config) {
 	err := os.Remove(markerPath)
 	switch {
 	case err == nil:
-		slog.Info("pre-upgrade marker removed: the migrations ran through", "path", markerPath)
+		slog.Info("pre-upgrade marker removed: the database stands at this binary's level", "path", markerPath)
 	case !errors.Is(err, os.ErrNotExist):
 		slog.Warn("cannot remove the pre-upgrade marker", "path", markerPath, "err", err)
 	}
