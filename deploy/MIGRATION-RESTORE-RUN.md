@@ -10,29 +10,29 @@ The record says what was done, how many times, and what was seen. It does not sa
 
 | Requirement | Result | Platform | Date, commit |
 |-------------|--------|----------|--------------|
-| MIG-01 | PASS: `MIG-01 PASS` stands in `amd64-t34-summary.txt` and in `amd64-t34-mig-src/mig.txt`. The backup made by v0.1.1's own `backup.sh` and binary ended `BACKUP-RC: 0` at `LEVEL-BEFORE: 60`; the document's restore line ended `RESTORE-RC: 0` with `RESTORE-NOTICE: yes` and `RESTORE-COMPLETE: yes`; the first start wrote one snapshot at level 60 (`SNAPSHOTS-AFTER: 1`, `SNAPSHOT-LEVEL: 60`, `JOURNAL-SNAPSHOT-LINES: 1`) and applied nine migrations (`JOURNAL-APPLIED-LINES: 9`, `JOURNAL-APPLIED-VERSIONS: 61 62 63 64 65 66 67 68 69`) to `LEVEL-AFTER: 69`; the old login, the seeded page and the same picture came back (`LOGIN-AFTER: 303 /admin/`, `PAGE-AFTER: 200`, `MEDIA-SHA-EQUAL: yes`), and `run.sh check` read `CHECK: 17 of 17` with `CHECK-RC: 0`, all in `amd64-t34-mig-src/mig.txt`. | Debian 12 container, systemd PID 1, linux/amd64 under emulation on an arm64 host (`amd64-t34-mig-src/versions.txt`) | 2026-11-21, 00854be |
-| MIG-02 | PASS: `MIG-02 PASS` stands in `amd64-t34-summary.txt` and in `amd64-t34-mig-src/mig.txt`. The two releases are named with their commits (`OLD-RELEASE: v0.1.1 (5bcae9b)`, `OLD-COMMIT: 5bcae9b448db814701310c5dfab26031d68c0d92`, `NEW-RELEASE: v0.1.4-255-g00854be (00854be)`), both levels with what the migration files of the two commits give (`LEVEL-BEFORE: 60`, `LEVEL-EXPECTED-BEFORE: 60`, `LEVEL-AFTER: 69`, `LEVEL-EXPECTED-AFTER: 69`), and the backup's own `MANIFEST` names its maker (`MANIFEST-VERSION: holzcloud v0.1.1 (5bcae9b)`); what `restore.sh` printed is `amd64-t34-mig-src/mig-restore.out` and what the first start wrote is `amd64-t34-mig-src/mig-journal.txt`. | same | 2026-11-21, 00854be |
+| MIG-01 | PASS: `MIG-01 PASS` stands in `amd64-t34-summary.txt` and in `amd64-t34-mig-src/mig.txt`. The backup made by v0.1.1's own `backup.sh` and binary ended `BACKUP-RC: 0` at `LEVEL-BEFORE: 60`; the document's restore line ended `RESTORE-RC: 0` with `RESTORE-NOTICE: yes` and `RESTORE-COMPLETE: yes`; the first start wrote one snapshot at level 60 (`SNAPSHOTS-AFTER: 1`, `SNAPSHOT-LEVEL: 60`, `JOURNAL-SNAPSHOT-LINES: 1`) and applied nine migrations (`JOURNAL-APPLIED-LINES: 9`, `JOURNAL-APPLIED-VERSIONS: 61 62 63 64 65 66 67 68 69`) to `LEVEL-AFTER: 69`; the old login, the seeded page and the same picture came back (`LOGIN-AFTER: 303 /admin/`, `PAGE-AFTER: 200`, `MEDIA-SHA-EQUAL: yes`), and `run.sh check` read `CHECK: 17 of 17` with `CHECK-RC: 0`, all in `amd64-t34-mig-src/mig.txt`. | Debian 12 container, systemd PID 1, linux/amd64 under emulation on an arm64 host (`amd64-t34-mig-src/versions.txt`) | 2026-11-21, cefe4ac |
+| MIG-02 | PASS: `MIG-02 PASS` stands in `amd64-t34-summary.txt` and in `amd64-t34-mig-src/mig.txt`. The two releases are named with their commits (`OLD-RELEASE: v0.1.1 (5bcae9b)`, `OLD-COMMIT: 5bcae9b448db814701310c5dfab26031d68c0d92`, `NEW-RELEASE: v0.1.4-261-gcefe4ac (cefe4ac)`), both levels with what the migration files of the two commits give (`LEVEL-BEFORE: 60`, `LEVEL-EXPECTED-BEFORE: 60`, `LEVEL-AFTER: 69`, `LEVEL-EXPECTED-AFTER: 69`), and the backup's own `MANIFEST` names its maker (`MANIFEST-VERSION: holzcloud v0.1.1 (5bcae9b)`); what `restore.sh` printed is `amd64-t34-mig-src/mig-restore.out` and what the first start wrote is `amd64-t34-mig-src/mig-journal.txt`. | same | 2026-11-21, cefe4ac |
 
-Evidence commit: 00854be
+Evidence commit: cefe4ac
 
-The binary under test is the one built from `NEW_REF` (pinned by `run` to the short sha of HEAD, `00854be`, read from `deploy/test/out/amd64-t34-evidence-commit.txt`) with the Build line of `deploy/DEPLOY.md`: `BINARY: holzcloud v0.1.4-255-g00854be (00854be)` in `amd64-t34-summary.txt`, the same as `target binary:`, `NEW_REF:` and `evidence commit:` in `amd64-t34-mig-src/versions.txt`, and the `version` and `commit` of the `/readyz` answer that `restore.sh` printed (`amd64-t34-mig-src/mig-restore.out`). The old binary is v0.1.1, built by the same Build line from the commit of its tag: `source binary: holzcloud v0.1.1 (5bcae9b)` and `v0.1.1 commit: 5bcae9b448db814701310c5dfab26031d68c0d92` in `amd64-t34-mig-src/versions.txt`, `OLD-VERSION-LINE: holzcloud v0.1.1 (5bcae9b)` in `amd64-t34-mig-src/mig.txt`. The summary carries `STAGES: mig upd rb` and no `REHEARSAL` line.
+The binary under test is the one built from `NEW_REF` (pinned by `run` to the short sha of HEAD, `cefe4ac`, read from `deploy/test/out/amd64-t34-evidence-commit.txt`) with the Build line of `deploy/DEPLOY.md`: `BINARY: holzcloud v0.1.4-261-gcefe4ac (cefe4ac)` in `amd64-t34-summary.txt`, the same as `target binary:`, `NEW_REF:` and `evidence commit:` in `amd64-t34-mig-src/versions.txt`, and the `version` and `commit` of the `/readyz` answer that `restore.sh` printed (`amd64-t34-mig-src/mig-restore.out`). The old binary is v0.1.1, built by the same Build line from the commit of its tag: `source binary: holzcloud v0.1.1 (5bcae9b)` and `v0.1.1 commit: 5bcae9b448db814701310c5dfab26031d68c0d92` in `amd64-t34-mig-src/versions.txt`, `OLD-VERSION-LINE: holzcloud v0.1.1 (5bcae9b)` in `amd64-t34-mig-src/mig.txt`. The summary carries `STAGES: mig upd rb` and no `REHEARSAL` line.
 
 ## How this was run
 
 `deploy/test/upgrade-verify.sh` is a sibling of `deploy/test/run.sh` in the shape of `deploy/test/backup-verify.sh`; it edits neither and reaches the harness through `run.sh`'s public subcommands only (`build`, `up`, `install`, `seed`, `transfer`, `check`). `run` refuses to start unless `PLATFORM=linux/amd64` and `TARGET=systemd-base`, refuses while a bound file or the binary's source differs from HEAD or is untracked, pins `NEW_REF` to the short sha of HEAD so that the binary and the scripts are one commit, and plays the stages `mig`, `upd` and `rb`, each in its own fresh containers. The verdict of each requirement is computed from the `KEY: value` files the stages wrote, and a stage that did not run reads NOT-RUN, so a trace can never pass for the set. Stage `mig` used two containers, `holzcloud-t34-mig-src` for v0.1.1 and `holzcloud-t34-mig-tgt` for this release; the stages `upd` and `rb` of the same set are recorded in `deploy/UPDATE-CHAIN-RUN.md` and `deploy/ROLLBACK-RUN.md`.
 
-The set was made once, from fresh containers, on the clean committed tree of `00854be` without `REHEARSAL`, started 2026-11-21T13:13:55Z and ended 13:25:09Z on the host clock (11 minutes 14 seconds for all three stages), exit status 0 (`deploy/test/out/amd64-t34-pass1.started`, `deploy/test/out/amd64-t34-pass1.finished` and `deploy/test/out/amd64-t34-pass1.status`). Before it the worktree held no earlier output of the driver and no `holzcloud-t34-*` container existed, and after it `bash deploy/test/upgrade-verify.sh down` removed the four containers. In the same window and at the same commit, `PLATFORM=linux/amd64 TARGET=systemd-base bash deploy/test/backup-verify.sh run` made the set of phase 32 again (13:25:27Z to 13:27:56Z, status 0, all three verdicts PASS; that set is recorded in `deploy/BACKUP-VERIFY-RUN.md`). No second set was made against `00854be`, and no other set is cited. An earlier set was made against `36b67cc`; the commit `00854be` changed `deploy/DEPLOY.md` and `deploy/test/upgrade-verify.sh` after it, so this record was written from this set and nothing of that set is quoted. The command was:
+The set was made once, from fresh containers, on the clean committed tree of `cefe4ac` without `REHEARSAL`, started 2026-11-21T14:13:05Z and ended 14:24:59Z on the host clock (11 minutes 54 seconds for all three stages), exit status 0 (`deploy/test/out/amd64-t34-pass1.started`, `deploy/test/out/amd64-t34-pass1.finished` and `deploy/test/out/amd64-t34-pass1.status`). Before it the worktree held no earlier output of the driver and no `holzcloud-t34-*` container existed, and after it `bash deploy/test/upgrade-verify.sh down` removed the four containers. In the same window and at the same commit, `PLATFORM=linux/amd64 TARGET=systemd-base bash deploy/test/backup-verify.sh run` made the set of phase 32 again (14:25:11Z to 14:27:08Z, status 0, all three verdicts PASS; that set is recorded in `deploy/BACKUP-VERIFY-RUN.md`). No second set was made against `cefe4ac`, and no other set is cited. Two earlier sets were superseded. The first was made against `36b67cc`; the commit `00854be` changed `deploy/DEPLOY.md` and `deploy/test/upgrade-verify.sh` after it. The second was made against `00854be`, and this record was first written from it. Its four verdicts read PASS, but the browser record of phase 34 then found that a plugin switched on in the admin did not start when the browser dropped the request that switched it on, because the plugin was loaded with that request's context and closed with it. The commit `cefe4ac` fixed that in `internal/plugin/runtime.go`, so the binary changed after the set of `00854be`, and the set was made again. So this record was written from this set, and nothing of either earlier set is quoted. The command was:
 
 ```text
 PLATFORM=linux/amd64 TARGET=systemd-base bash deploy/test/upgrade-verify.sh run
 ```
 
-The knob not set on that line had its default: `STAGES=mig upd rb`. The log of the run is `deploy/test/out/amd64-t34-pass1.log`, which is not pasted; its first line reads `upgrade-verify: platform linux/amd64, NEW_REF pinned to 00854be, v0.1.1 is 5bcae9b448db814701310c5dfab26031d68c0d92, stages: mig upd rb`.
+The knob not set on that line had its default: `STAGES=mig upd rb`. The log of the run is `deploy/test/out/amd64-t34-pass1.log`, which is not pasted; its first line reads `upgrade-verify: platform linux/amd64, NEW_REF pinned to cefe4ac, v0.1.1 is 5bcae9b448db814701310c5dfab26031d68c0d92, stages: mig upd rb`.
 
 No bound file changed after the evidence commit. The bound files for this set are `deploy/DEPLOY.md`, `deploy/backup.sh`, `deploy/restore.sh`, `deploy/holzcloud.service`, `deploy/test/run.sh`, `deploy/test/Dockerfile`, `deploy/test/upgrade-verify.sh` and the five plugin archives under `plugins/`, together with the binary built from `cmd`, `internal`, `go.mod`, `go.sum`, `changelog.go` and the `CHANGELOG.md` it embeds; the old release is bound by the commit of its tag, which `amd64-t34-mig-src/mig.txt` names. This command exited 0 when the record was written:
 
 ```text
-git diff --quiet 00854be HEAD -- deploy/DEPLOY.md deploy/backup.sh deploy/restore.sh deploy/holzcloud.service deploy/test/run.sh deploy/test/Dockerfile deploy/test/upgrade-verify.sh plugins/bestellung/bestellung.zip plugins/jahreszahl/jahreszahl.zip plugins/kontaktformular/kontaktformular.zip plugins/nicht-gefunden/nicht-gefunden.zip plugins/suche/suche.zip cmd internal go.mod go.sum changelog.go CHANGELOG.md
+git diff --quiet cefe4ac HEAD -- deploy/DEPLOY.md deploy/backup.sh deploy/restore.sh deploy/holzcloud.service deploy/test/run.sh deploy/test/Dockerfile deploy/test/upgrade-verify.sh plugins/bestellung/bestellung.zip plugins/jahreszahl/jahreszahl.zip plugins/kontaktformular/kontaktformular.zip plugins/nicht-gefunden/nicht-gefunden.zip plugins/suche/suche.zip cmd internal go.mod go.sum changelog.go CHANGELOG.md
 ```
 
 Before the run, `bash deploy/test/upgrade-verify.sh selftest` ended `SELFTEST OK (409 cases)` and `bash deploy/test/backup-verify.sh selftest` ended `SELFTEST OK (117 cases)`; neither output is part of the set.
@@ -48,47 +48,47 @@ Everything here precedes every result: it is what the containers do differently 
 | DEVIATION[old-script] | The `backup.sh` that today's Install text copied was replaced by the `backup.sh` of v0.1.1 (`git show v0.1.1:deploy/backup.sh`, root, mode 755) before the manual line was played; its sha256 is `BACKUP-SCRIPT` in `amd64-t34-mig-src/mig.txt` | A server still on v0.1.1 has that script from its own install |
 | DEVIATION[fixture] | Two lines. The five plugin archives were copied into `/opt/holzcloud/plugin-zips` before `run.sh seed`, and the login user was made with the CLI of v0.1.1; with the website, page, AI key and test image that `run.sh seed` makes, they stand in for operator work. The login password file, the AI key file and the test image cross from container to container by exec-pipe and are part of no backup. No order row is written (`ORDER: none` in `amd64-t34-mig-src/mig.txt`) | The operator's own content, users and plugins |
 | DEVIATION[browser] | The logins before the backup and after the restore were played with `curl`, with the CSRF field read out of the page and, because the shipped unit sets `HOLZCLOUD_SECURE=true`, a Referer with the https origin on a plain http post | A browser behind the reverse proxy |
-| DEVIATION[backup-name] | The sample timestamp of the document's restore line (`sudo /opt/holzcloud/deploy/restore.sh /opt/holzcloud/backups/20260802-031500`) was replaced by the transferred directory `/opt/holzcloud/backups/20261121-131445`, and `yes` was typed on stdin | The operator types the name of the backup they restore |
+| DEVIATION[backup-name] | The sample timestamp of the document's restore line (`sudo /opt/holzcloud/deploy/restore.sh /opt/holzcloud/backups/20260802-031500`) was replaced by the transferred directory `/opt/holzcloud/backups/20261121-141407`, and `yes` was typed on stdin | The operator types the name of the backup they restore |
 | DEVIATION[transfer] | The backup travelled as a tar stream through the host (`docker cp SOURCE:dir -` into `docker cp - TARGET:/opt/holzcloud/backups`), proven lossless by the sha256 of every file on both sides (`TRANSFER-RC: 0`) | `rsync` or `scp` between two machines, which the document leaves to the operator |
 | DEVIATION[scp] | Three lines: `scp holzcloud user@your-server:` played as `docker cp` of the v0.1.1 binary to the source and of this release's binary to the target, and `scp -r deploy/ user@your-server:` played as a tar stream of the committed `deploy` directory (without `deploy/test/out`) into `/root` | `scp` from the build machine into the operator's home directory |
 | DEVIATION[start-limit] | `systemctl reset-failed holzcloud` ran before the restore and before `run.sh check`, because the install start, the restore's start and check's restart come closer together than on a server | One restore, by hand, which never meets the limit |
 | DEVIATION[dropin] | `/etc/systemd/system/holzcloud.service.d/container.conf` sets `ProcSubset=all`, because the document's unchanged start crashed in the container (`unit-start-unchanged.txt` in `amd64-t34-mig-src`) | The unit as shipped |
-| DEVIATION[mount] | The unit's `RequiresMountsFor` names `/opt/holzcloud/data`, a plain directory on the container's root filesystem, so that line was not exercised, and the restore renamed the data directory aside (`Moving current data to /opt/holzcloud/data.before-restore-20261121-131514` in `amd64-t34-mig-src/mig-restore.out`) | A data directory on its own mount |
+| DEVIATION[mount] | The unit's `RequiresMountsFor` names `/opt/holzcloud/data`, a plain directory on the container's root filesystem, so that line was not exercised, and the restore renamed the data directory aside (`Moving current data to /opt/holzcloud/data.before-restore-20261121-141448` in `amd64-t34-mig-src/mig-restore.out`) | A data directory on its own mount |
 
 ## Findings
 
-Each finding has the class of the earlier records' rule: (1) a bug of the harness, fixed in the driver; (2) a limit of the container, a named deviation or a *Not tested* line; (3) a measured property of a shipped file that matches what it and its document say, recorded and not edited; (4) a defect, a shipped file doing less than it or its document says, with a fix in a commit of its own. No finding of this set is class 1 or class 4, and no shipped file was edited after the evidence commit.
+Each finding has the class of the earlier records' rule: (1) a bug of the harness, fixed in the driver; (2) a limit of the container, a named deviation or a *Not tested* line; (3) a measured property of a shipped file that matches what it and its document say, recorded and not edited; (4) a defect, a shipped file doing less than it or its document says, with a fix in a commit of its own. No finding of this set is class 1 or class 4, and no shipped file was edited after the evidence commit. The defect that the browser record found at `00854be`, a plugin load ended by a dropped request, was fixed in `cefe4ac` before this set (*How this was run*).
 
-The test for class 4 was whether a result contradicts something `deploy/restore.sh`, `deploy/DEPLOY.md` or the binary says at `00854be`, or leaves the operator worse off than they say. The document says that a backup made before 0.1.5 is restored with a notice, that migrations run automatically on startup, that the first start writes one `pre-upgrade snapshot written` line with the level it holds and then one `migration applied` per migration, and that `restore.sh` waits for `/readyz` for `READY_SECONDS`. F-1 to F-4 are those sentences observed; F-5 is what the pair shows about plugins.
+The test for class 4 was whether a result contradicts something `deploy/restore.sh`, `deploy/DEPLOY.md` or the binary says at `cefe4ac`, or leaves the operator worse off than they say. The document says that a backup made before 0.1.5 is restored with a notice, that migrations run automatically on startup, that the first start writes one `pre-upgrade snapshot written` line with the level it holds and then one `migration applied` per migration, and that `restore.sh` waits for `/readyz` for `READY_SECONDS`. F-1 to F-4 are those sentences observed; F-5 is what the pair shows about plugins.
 
 **F-1 (class 3): A backup made by v0.1.1 has no checksum file, and restore.sh took the path the document gives it: a notice that its files were not verified, then the snapshot check.** The backup directory holds no `SHA256SUMS` (`SUMS-IN-BACKUP: no` in `amd64-t34-mig-src/mig.txt`; the v0.1.1 script wrote no `Writing checksums...` line, `amd64-t34-mig-src/mig-backup.out`). The line (`amd64-t34-mig-src/mig-restore.out`):
 
 ```text
-1795266913.800673347 NOTICE: /opt/holzcloud/backups/20261121-131445 has no checksum file (made before 0.1.5); its files were not verified
+1795270488.423968589 NOTICE: /opt/holzcloud/backups/20261121-141407 has no checksum file (made before 0.1.5); its files were not verified
 ```
 
-**F-2 (class 3): The snapshot check of restore.sh ran the nine migrations on a temporary copy of the backup before it stopped the service, so the crossing was tried once on a copy before the live data was touched.** Between `Verifying snapshot...` and `integrity: ok`, the binary of this release applied the versions 61 to 69 to `/tmp/tmp.POLp56WZ1O/holzcloud.sqlite` and the row check read `files: 3 rows checked, 0 missing`; only then came `Stopping holzcloud...` (`amd64-t34-mig-src/mig-restore.out`). The live database was migrated again, by the service, at its first start (F-3).
+**F-2 (class 3): The snapshot check of restore.sh ran the nine migrations on a temporary copy of the backup before it stopped the service, so the crossing was tried once on a copy before the live data was touched.** Between `Verifying snapshot...` and `integrity: ok`, the binary of this release applied the versions 61 to 69 to `/tmp/tmp.G0PVKINhfy/holzcloud.sqlite` and the row check read `files: 3 rows checked, 0 missing`; only then came `Stopping holzcloud...` (`amd64-t34-mig-src/mig-restore.out`). The live database was migrated again, by the service, at its first start (F-3).
 
 **F-3 (class 3): The first start after the restore wrote one pre-upgrade snapshot of the restored database at level 60 and applied the migrations 61 to 69, one journal line each.** The two ends of the journal of that start (`amd64-t34-mig-src/mig-journal.txt`):
 
 ```text
-{"time":"2026-11-21T13:15:14.835680166Z","level":"INFO","msg":"pre-upgrade snapshot written","path":"/opt/holzcloud/data/pre-upgrade-v0.1.4-255-g00854be-20261121-131514.sqlite","level":60}
-{"time":"2026-11-21T13:15:14.907302041Z","level":"INFO","msg":"migration applied","version":69,"type":"sql","duration_ms":5}
+{"time":"2026-11-21T14:14:49.876991714Z","level":"INFO","msg":"pre-upgrade snapshot written","path":"/opt/holzcloud/data/pre-upgrade-v0.1.4-261-gcefe4ac-20261121-141449.sqlite","level":60}
+{"time":"2026-11-21T14:14:49.934072298Z","level":"INFO","msg":"migration applied","version":69,"type":"sql","duration_ms":5}
 ```
 
 The snapshot is the only one in the data directory after the start and holds level 60 when read from the file (`SNAPSHOTS-AFTER: 1`, `SNAPSHOT-FILE`, `SNAPSHOT-LEVEL: 60` in `amd64-t34-mig-src/mig.txt`), so the database as the backup held it is still on the server after the crossing.
 
-**F-4 (class 3): The first start fitted inside the readiness wait of restore.sh with room to spare, under emulation.** The first start took 10.8 seconds against the 30 seconds `restore.sh` waits (`FIRST-START-S: 10.8`, `READY-SECONDS: 30` in `amd64-t34-mig-src/mig.txt`), and `Waiting for readiness...` to `=== Restore complete ===` read 1795266914.626002833 to 1795266925.346423213 (`amd64-t34-mig-src/mig-restore.out`).
+**F-4 (class 3): The first start fitted inside the readiness wait of restore.sh with room to spare, under emulation.** The first start took 13.3 seconds against the 30 seconds `restore.sh` waits (`FIRST-START-S: 13.3`, `READY-SECONDS: 30` in `amd64-t34-mig-src/mig.txt`), and `Waiting for readiness...` to `=== Restore complete ===` read 1795270489.548681922 to 1795270502.749580304 (`amd64-t34-mig-src/mig-restore.out`).
 
 **F-5 (class 3): The plugin modules of v0.1.1 load, run and answer on the host of this release after the restore, and the plugin archives of this release do not install on v0.1.1.** After the restore, `run.sh check` read `PASS loaded`, `PASS running` and `PASS invoke` for all five plugins, `PASS no-load-failures` and `PASS stable` (`amd64-t34-mig-src/mig-check.txt`), with the plugins the backup carried, the archives of v0.1.1 (`DEVIATION[old-plugins]`). The other direction does not hold: v0.1.1 refuses today's `kontaktformular` and `bestellung` archives because their manifests declare the hook `privacy` (`amd64-t34-mig-src/deviations.txt`). That is the plugin interface changing between releases, which is why it stays outside what 1.0 promises.
 
 ## MIG-01: a backup of an older release restores into this one, and the site passes its checks
 
-**What was done.** On the source container, today's Install text installed v0.1.1, built from the commit of its tag; the driver seeded it with v0.1.1's own plugin archives and a login user made by v0.1.1's CLI (`SEED-RC: 0`), and read the login, the seeded page and the uploaded picture over HTTP (`LOGIN-BEFORE: 303 /admin/`, `PAGE-BEFORE: 200`, `MEDIA-BEFORE: HTTP 200 925d26e12cb8ed51e272c6cadba3f6fb5d32f4af8bf06d1d2123ddbf8a176577` in `amd64-t34-mig-src/mig.txt`). The document's manual backup line was then played by its exact text with v0.1.1's `backup.sh` and binary (`BACKUP-RC: 0`, `BACKUP-DIR: /opt/holzcloud/backups/20261121-131445`); it ends `=== Backup complete: /opt/holzcloud/backups/20261121-131445 ===` and `20M` (`amd64-t34-mig-src/mig-backup.out`). The backup was carried to the target container (`TRANSFER-RC: 0`), which runs this release, and restored there with the document's restore line, `yes` on stdin, every line stamped with the container clock (`amd64-t34-mig-src/mig-restore.out`): the header names the backup's version, `version=holzcloud v0.1.1 (5bcae9b)`; the notice of F-1; the snapshot check with the nine migrations on a copy (F-2), `integrity: ok` and `files: 3 rows checked, 0 missing`; the stop, the move of the old data aside, the restore of the database, the CSRF key, the media and the plugins; the start, `Waiting for readiness...` and:
+**What was done.** On the source container, today's Install text installed v0.1.1, built from the commit of its tag; the driver seeded it with v0.1.1's own plugin archives and a login user made by v0.1.1's CLI (`SEED-RC: 0`), and read the login, the seeded page and the uploaded picture over HTTP (`LOGIN-BEFORE: 303 /admin/`, `PAGE-BEFORE: 200`, `MEDIA-BEFORE: HTTP 200 925d26e12cb8ed51e272c6cadba3f6fb5d32f4af8bf06d1d2123ddbf8a176577` in `amd64-t34-mig-src/mig.txt`). The document's manual backup line was then played by its exact text with v0.1.1's `backup.sh` and binary (`BACKUP-RC: 0`, `BACKUP-DIR: /opt/holzcloud/backups/20261121-141407`); it ends `=== Backup complete: /opt/holzcloud/backups/20261121-141407 ===` and `20M` (`amd64-t34-mig-src/mig-backup.out`). The backup was carried to the target container (`TRANSFER-RC: 0`), which runs this release, and restored there with the document's restore line, `yes` on stdin, every line stamped with the container clock (`amd64-t34-mig-src/mig-restore.out`): the header names the backup's version, `version=holzcloud v0.1.1 (5bcae9b)`; the notice of F-1; the snapshot check with the nine migrations on a copy (F-2), `integrity: ok` and `files: 3 rows checked, 0 missing`; the stop, the move of the old data aside, the restore of the database, the CSRF key, the media and the plugins; the start, `Waiting for readiness...` and:
 
 ```text
-1795266925.346423213 === Restore complete ===
-1795266925.393392630 {"status":"ok","version":"v0.1.4-255-g00854be","commit":"00854be","uptime_s":0,"integrity":"ok","disk_free_bytes":1584481202176,"database":{"freelist_count":0,"page_count":180,"size_bytes":667648,"wal_bytes":362592}}
+1795270502.749580304 === Restore complete ===
+1795270502.802876720 {"status":"ok","version":"v0.1.4-261-gcefe4ac","commit":"cefe4ac","uptime_s":1,"integrity":"ok","disk_free_bytes":1584480804864,"database":{"freelist_count":0,"page_count":180,"size_bytes":667648,"wal_bytes":362592}}
 ```
 
 The first start wrote the snapshot and applied the nine migrations (F-3, `amd64-t34-mig-src/mig-journal.txt`). Then the site was read again: the setup form is gone (`SETUP-AFTER: 404`), the user of v0.1.1 logs in with the old password (`LOGIN-AFTER: 303 /admin/`) and is sent on to set up a second factor (`LOGIN-NEXT-AFTER: 303 /admin/2fa/einrichten`), the seeded page answers (`PAGE-AFTER: 200`), the picture answers with the same bytes (`MEDIA-AFTER` and `MEDIA-SHA-EQUAL: yes`), and `run.sh check` passed all of its assertions (`CHECK-RC: 0`, `CHECK: 17 of 17` in `amd64-t34-mig-src/mig.txt`; the 17 `PASS` lines in `amd64-t34-mig-src/mig-check.txt`).
@@ -99,9 +99,9 @@ The first start wrote the snapshot and applied the nine migrations (F-3, `amd64-
 
 ## MIG-02: the record names both releases, both levels and what the restore printed
 
-**What was done.** The stage wrote both releases with their commits into `amd64-t34-mig-src/mig.txt`: `OLD-RELEASE: v0.1.1 (5bcae9b)` with `OLD-COMMIT: 5bcae9b448db814701310c5dfab26031d68c0d92` and `OLD-VERSION-LINE: holzcloud v0.1.1 (5bcae9b)` from the old binary, and `NEW-RELEASE: v0.1.4-255-g00854be (00854be)`. Neither level was typed. The level before was read from the backup's database file through the immutable URI (`LEVEL-BEFORE: 60`) and the level after from the live database through a read-only connection (`LEVEL-AFTER: 69`), and each was compared with the number of migration files of its commit (`LEVEL-EXPECTED-BEFORE: 60`, `LEVEL-EXPECTED-AFTER: 69`). The backup's own `MANIFEST` names v0.1.1 as its maker (`MANIFEST-VERSION: holzcloud v0.1.1 (5bcae9b)`), and the backup script is bound by its sha256 (`BACKUP-SCRIPT: v0.1.1 sha256 ac02fac9096d3ed1665794c87a1624f8c896bb980ae615d80be0d4bab7d8de96`). What `restore.sh` printed is pasted whole as `amd64-t34-mig-src/mig-restore.out`, and the journal lines of the first start as `amd64-t34-mig-src/mig-journal.txt`, one `pre-upgrade snapshot written` with `"level":60` and nine `migration applied` with the versions 61 to 69 (`JOURNAL-SNAPSHOT-LINES: 1`, `JOURNAL-APPLIED-LINES: 9`, `JOURNAL-APPLIED-VERSIONS: 61 62 63 64 65 66 67 68 69`).
+**What was done.** The stage wrote both releases with their commits into `amd64-t34-mig-src/mig.txt`: `OLD-RELEASE: v0.1.1 (5bcae9b)` with `OLD-COMMIT: 5bcae9b448db814701310c5dfab26031d68c0d92` and `OLD-VERSION-LINE: holzcloud v0.1.1 (5bcae9b)` from the old binary, and `NEW-RELEASE: v0.1.4-261-gcefe4ac (cefe4ac)`. Neither level was typed. The level before was read from the backup's database file through the immutable URI (`LEVEL-BEFORE: 60`) and the level after from the live database through a read-only connection (`LEVEL-AFTER: 69`), and each was compared with the number of migration files of its commit (`LEVEL-EXPECTED-BEFORE: 60`, `LEVEL-EXPECTED-AFTER: 69`). The backup's own `MANIFEST` names v0.1.1 as its maker (`MANIFEST-VERSION: holzcloud v0.1.1 (5bcae9b)`), and the backup script is bound by its sha256 (`BACKUP-SCRIPT: v0.1.1 sha256 ac02fac9096d3ed1665794c87a1624f8c896bb980ae615d80be0d4bab7d8de96`). What `restore.sh` printed is pasted whole as `amd64-t34-mig-src/mig-restore.out`, and the journal lines of the first start as `amd64-t34-mig-src/mig-journal.txt`, one `pre-upgrade snapshot written` with `"level":60` and nine `migration applied` with the versions 61 to 69 (`JOURNAL-SNAPSHOT-LINES: 1`, `JOURNAL-APPLIED-LINES: 9`, `JOURNAL-APPLIED-VERSIONS: 61 62 63 64 65 66 67 68 69`).
 
-*What it shows.* The restore crossed from v0.1.1 (commit 5bcae9b, migration level 60, read from the backup's database file) to this release (commit 00854be, level 69, read from the restored database), and `restore.sh` printed the notice that a backup made before 0.1.5 has no checksum file, verified the snapshot, restored it and ended with `=== Restore complete ===` and a `/readyz` answer of this release with `status` and `integrity` `ok`.
+*What it shows.* The restore crossed from v0.1.1 (commit 5bcae9b, migration level 60, read from the backup's database file) to this release (commit cefe4ac, level 69, read from the restored database), and `restore.sh` printed the notice that a backup made before 0.1.5 has no checksum file, verified the snapshot, restored it and ended with `=== Restore complete ===` and a `/readyz` answer of this release with `status` and `integrity` `ok`.
 
 ## Measurements
 
@@ -109,14 +109,14 @@ The figures the harness wrote. Every one is an emulation figure on an aarch64 ho
 
 | Figure | Value | Where |
 |--------|-------|-------|
-| The manual backup on v0.1.1 | 1795266884.967714708 to 1795266885.889305875 wall, 20M | the `WALL` line and the last line of `amd64-t34-mig-src/mig-backup.out` |
-| The whole restore, from its first line to its last | 1795266913.521094305 to 1795266925.430708588 wall | the `WALL` line of `amd64-t34-mig-src/mig-restore.out` |
-| The first start after the restore | 10.8 s, against a readiness wait of 30 s | `FIRST-START-S`, `READY-SECONDS` in `amd64-t34-mig-src/mig.txt` |
-| The snapshot and the nine migrations of the first start | 13:15:14.835680166Z to 13:15:14.907302041Z | `amd64-t34-mig-src/mig-journal.txt` |
+| The manual backup on v0.1.1 | 1795270446.996067666 to 1795270448.263606459 wall, 20M | the `WALL` line and the last line of `amd64-t34-mig-src/mig-backup.out` |
+| The whole restore, from its first line to its last | 1795270488.107763797 to 1795270502.877167554 wall | the `WALL` line of `amd64-t34-mig-src/mig-restore.out` |
+| The first start after the restore | 13.3 s, against a readiness wait of 30 s | `FIRST-START-S`, `READY-SECONDS` in `amd64-t34-mig-src/mig.txt` |
+| The snapshot and the nine migrations of the first start | 14:14:49.876991714Z to 14:14:49.934072298Z | `amd64-t34-mig-src/mig-journal.txt` |
 | The tables of the v0.1.1 database | 55 | `backup verified ... tables=55` in `amd64-t34-mig-src/mig-backup.out` |
 | The restored database after its first start | 180 pages, 667648 bytes | the `/readyz` answer in `amd64-t34-mig-src/mig-restore.out` |
-| The median of ten requests per plugin route after the restore | 0.009774 s to 0.015807 s | the `LATENCY` lines of `amd64-t34-mig-src/mig-check.txt` |
-| The whole run, all three stages | 13:13:55Z to 13:25:09Z | `deploy/test/out/amd64-t34-pass1.started`, `deploy/test/out/amd64-t34-pass1.finished` |
+| The median of ten requests per plugin route after the restore | 0.010560 s to 0.017325 s | the `LATENCY` lines of `amd64-t34-mig-src/mig-check.txt` |
+| The whole run, all three stages | 14:13:05Z to 14:24:59Z | `deploy/test/out/amd64-t34-pass1.started`, `deploy/test/out/amd64-t34-pass1.finished` |
 
 ## Container vs. server
 
@@ -165,7 +165,7 @@ UPD-01 PASS
 UPD-02 PASS
 STAGES: mig upd rb
 DEVIATIONS: backup-name browser dropin emulation fixture mount old-plugins old-script scp start-limit synthetic-build transfer
-BINARY: holzcloud v0.1.4-255-g00854be (00854be)
+BINARY: holzcloud v0.1.4-261-gcefe4ac (cefe4ac)
 ```
 
 #### amd64-t34-mig-src/versions.txt
@@ -181,10 +181,10 @@ host uname -m:         arm64
 container uname -m:    x86_64
 container systemctl:   systemd 252 (252.39-1~deb12u2)
 source binary:         holzcloud v0.1.1 (5bcae9b)
-target binary:         holzcloud v0.1.4-255-g00854be (00854be)
+target binary:         holzcloud v0.1.4-261-gcefe4ac (cefe4ac)
 v0.1.1 commit:         5bcae9b448db814701310c5dfab26031d68c0d92
-NEW_REF:               00854be
-evidence commit:       00854be
+NEW_REF:               cefe4ac
+evidence commit:       cefe4ac
 ```
 
 #### amd64-t34-mig-src/deviations.txt
@@ -194,14 +194,14 @@ DEVIATION[old-plugins]: the v0.1.1 source is seeded with the plugin archives of 
 DEVIATION[fixture]: the five plugin archives are copied into /opt/holzcloud/plugin-zips before run.sh seed, and the login user is made with the CLI of v0.1.1 (password in a root-only file, given on stdin); with the website, page, AI key and test image run.sh seed makes, they stand in for operator work in the admin and are no step of the document. No order row is written (ORDER: none)
 DEVIATION[browser]: the login before the backup and after the restore is played with curl, not in a browser; the shipped unit sets HOLZCLOUD_SECURE=true, so the post over plain http carries a Referer with the https origin, and the hidden CSRF field is read out of the page
 DEVIATION[old-script]: /opt/holzcloud/deploy/backup.sh is replaced by the backup.sh of v0.1.1 (git show v0.1.1:deploy/backup.sh, root 755) before the manual line is played, because today's Install text copied this tree's; a server still on v0.1.1 has that script there from its own install
-DEVIATION[backup-name]: the sample timestamp of the document's restore line is replaced by the transferred directory /opt/holzcloud/backups/20261121-131445; the answer 'yes' is typed on stdin
+DEVIATION[backup-name]: the sample timestamp of the document's restore line is replaced by the transferred directory /opt/holzcloud/backups/20261121-141407; the answer 'yes' is typed on stdin
 DEVIATION[start-limit]: systemctl reset-failed holzcloud runs before the restore and before run.sh check; the install start, the restore's start and check's restart come closer together than on a server
 DEVIATION[emulation]: the Docker host is aarch64; the linux/amd64 containers run under emulation, so every wall time of this set (the first start after the restore among them) is an emulation figure, not a server's
 DEVIATION[scp]: 'scp holzcloud user@your-server:' was played as docker cp of deploy/test/out/bin/holzcloud-old-v0.1.1 to /root/holzcloud in the container (there is no ssh and no second machine here)
 DEVIATION[scp]: 'scp -r deploy/ user@your-server:' was played as a tar stream of the working tree's deploy directory (without deploy/test/out) into /root in the container, by docker cp -
 DEVIATION[dropin]: /etc/systemd/system/holzcloud.service.d/container.conf sets ProcSubset=all (container only; the document's unchanged start crashed, see unit-start-unchanged.txt)
 DEVIATION[mount]: the unit's RequiresMountsFor names /opt/holzcloud/data, a plain directory on the container's root filesystem; no separate mount exists here, so that line was not exercised
-DEVIATION[scp]: 'scp holzcloud user@your-server:' was played as docker cp of deploy/test/out/bin/holzcloud-new-00854be to /root/holzcloud in the container (there is no ssh and no second machine here)
+DEVIATION[scp]: 'scp holzcloud user@your-server:' was played as docker cp of deploy/test/out/bin/holzcloud-new-cefe4ac to /root/holzcloud in the container (there is no ssh and no second machine here)
 DEVIATION[transfer]: the backup travels as a tar stream through the host (docker cp SOURCE:dir - into docker cp - TARGET:/opt/holzcloud/backups); on two real machines it would be rsync or scp, which the document leaves to the operator. Proof of a lossless transfer is the sha256 of every file on both sides
 DEVIATION[fixture]: the login password file, the AI key file and the test image are fixtures that stand in for what an operator remembers; none of them is part of any backup, and they cross from container to container by exec-pipe, never through a host file
 ```
@@ -212,7 +212,7 @@ DEVIATION[fixture]: the login password file, the AI key file and the test image 
 OLD-RELEASE: v0.1.1 (5bcae9b)
 OLD-COMMIT: 5bcae9b448db814701310c5dfab26031d68c0d92
 OLD-VERSION-LINE: holzcloud v0.1.1 (5bcae9b)
-NEW-RELEASE: v0.1.4-255-g00854be (00854be)
+NEW-RELEASE: v0.1.4-261-gcefe4ac (cefe4ac)
 OLD-PLUGIN: bestellung sha256 2ebdb9da08e322ab1c3312e742309222f22496fdd4deb3bf13e21ed6eb75eceb
 OLD-PLUGIN: jahreszahl sha256 3bd0ca9de1d077e9ccc5ae49d0b9fad95d5cdbf724efc844f472312d5bbde1d2
 OLD-PLUGIN: kontaktformular sha256 062eb61c4841b2e8cddb1321725368a6fd3b380f139550ce9e232ec36e03af9a
@@ -221,11 +221,11 @@ OLD-PLUGIN: suche sha256 e2d1a5247c8972a83f13e0a41cf58687efc51e174835999270ed7a6
 SEED-RC: 0
 LOGIN-BEFORE: 303 /admin/
 PAGE-BEFORE: 200
-MEDIA-PATH: /media/1/01b6f8640510e78d2553a8f531789b03.jpg
+MEDIA-PATH: /media/1/00b72934f04ab1e713522f67a6c75537.jpg
 MEDIA-BEFORE: HTTP 200 925d26e12cb8ed51e272c6cadba3f6fb5d32f4af8bf06d1d2123ddbf8a176577
 BACKUP-SCRIPT: v0.1.1 sha256 ac02fac9096d3ed1665794c87a1624f8c896bb980ae615d80be0d4bab7d8de96
 BACKUP-RC: 0
-BACKUP-DIR: /opt/holzcloud/backups/20261121-131445
+BACKUP-DIR: /opt/holzcloud/backups/20261121-141407
 MANIFEST-VERSION: holzcloud v0.1.1 (5bcae9b)
 SUMS-IN-BACKUP: no
 LEVEL-BEFORE: 60
@@ -235,9 +235,9 @@ RESTORE-RC: 0
 RESTORE-NOTICE: yes
 RESTORE-COMPLETE: yes
 READY-SECONDS: 30
-FIRST-START-S: 10.8
+FIRST-START-S: 13.3
 SNAPSHOTS-AFTER: 1
-SNAPSHOT-FILE: /opt/holzcloud/data/pre-upgrade-v0.1.4-255-g00854be-20261121-131514.sqlite
+SNAPSHOT-FILE: /opt/holzcloud/data/pre-upgrade-v0.1.4-261-gcefe4ac-20261121-141449.sqlite
 SNAPSHOT-LEVEL: 60
 JOURNAL-SNAPSHOT-LINES: 1
 JOURNAL-APPLIED-LINES: 9
@@ -260,70 +260,70 @@ MIG-02 PASS
 #### amd64-t34-mig-src/mig-backup.out
 
 ```text
-1795266885.141312417 === holzcloud-CMS backup: 20261121-131445 ===
-1795266885.226636083 Backing up database...
-1795266885.354846542 2026/11/21 13:14:45 INFO sqlite opened journal_mode=wal path=/opt/holzcloud/data/holzcloud.sqlite
-1795266885.397939458 2026/11/21 13:14:45 INFO sqlite opened journal_mode=wal path=/opt/holzcloud/backups/20261121-131445/holzcloud.sqlite
-1795266885.418393917 2026/11/21 13:14:45 INFO backup verified path=/opt/holzcloud/backups/20261121-131445/holzcloud.sqlite tables=55
-1795266885.438346750 backup written and verified: /opt/holzcloud/backups/20261121-131445/holzcloud.sqlite
-1795266885.458403167 Backing up CSRF key...
-1795266885.478047708 Backing up media...
-1795266885.564167542 Backing up plugins...
-1795266885.824372834 Pruning backups older than 30 days...
-1795266885.849610167 === Backup complete: /opt/holzcloud/backups/20261121-131445 ===
-1795266885.868264750 20M	/opt/holzcloud/backups/20261121-131445
-WALL 1795266884.967714708 1795266885.889305875
+1795270447.194285792 === holzcloud-CMS backup: 20261121-141407 ===
+1795270447.328697708 Backing up database...
+1795270447.530897083 2026/11/21 14:14:07 INFO sqlite opened journal_mode=wal path=/opt/holzcloud/data/holzcloud.sqlite
+1795270447.625190292 2026/11/21 14:14:07 INFO sqlite opened journal_mode=wal path=/opt/holzcloud/backups/20261121-141407/holzcloud.sqlite
+1795270447.651378917 2026/11/21 14:14:07 INFO backup verified path=/opt/holzcloud/backups/20261121-141407/holzcloud.sqlite tables=55
+1795270447.679014292 backup written and verified: /opt/holzcloud/backups/20261121-141407/holzcloud.sqlite
+1795270447.712188500 Backing up CSRF key...
+1795270447.741007333 Backing up media...
+1795270447.837439917 Backing up plugins...
+1795270448.188205459 Pruning backups older than 30 days...
+1795270448.209007209 === Backup complete: /opt/holzcloud/backups/20261121-141407 ===
+1795270448.230059417 20M	/opt/holzcloud/backups/20261121-141407
+WALL 1795270446.996067666 1795270448.263606459
 ```
 
 #### amd64-t34-mig-src/mig-restore.out
 
 ```text
-1795266913.695499055 === Restoring from /opt/holzcloud/backups/20261121-131445 ===
-1795266913.718144430 timestamp=20261121-131445
-1795266913.737040680 version=holzcloud v0.1.1 (5bcae9b)
-1795266913.758306639 data_dir=/opt/holzcloud/data
-1795266913.780067097 host=cd4054ea6fff
-1795266913.800673347 NOTICE: /opt/holzcloud/backups/20261121-131445 has no checksum file (made before 0.1.5); its files were not verified
-1795266913.821955180 Verifying snapshot...
-1795266914.065392597 2026/11/21 13:15:13 INFO sqlite opened journal_mode=wal path=/tmp/tmp.POLp56WZ1O/holzcloud.sqlite
-1795266914.086096889 2026/11/21 13:15:14 INFO migration applied version=61 type=sql duration_ms=15
-1795266914.103773930 2026/11/21 13:15:14 INFO migration applied version=62 type=sql duration_ms=3
-1795266914.123119889 2026/11/21 13:15:14 INFO migration applied version=63 type=sql duration_ms=8
-1795266914.141175680 2026/11/21 13:15:14 INFO migration applied version=64 type=sql duration_ms=0
-1795266914.162258472 2026/11/21 13:15:14 INFO migration applied version=65 type=sql duration_ms=0
-1795266914.180237680 2026/11/21 13:15:14 INFO migration applied version=66 type=sql duration_ms=0
-1795266914.200957805 2026/11/21 13:15:14 INFO migration applied version=67 type=sql duration_ms=4
-1795266914.223485555 2026/11/21 13:15:14 INFO migration applied version=68 type=sql duration_ms=3
-1795266914.243192264 2026/11/21 13:15:14 INFO migration applied version=69 type=sql duration_ms=5
-1795266914.261317805 integrity: ok
-1795266914.284141430 files: 3 rows checked, 0 missing
-1795266914.304116222 Stopping holzcloud...
-1795266914.325491389 Moving current data to /opt/holzcloud/data.before-restore-20261121-131514
-1795266914.341788347 Restoring database...
-1795266914.361202764 Restoring CSRF key...
-1795266914.378051264 Restoring media...
-1795266914.411006166 Restoring plugins...
-1795266914.576134458 Starting holzcloud...
-1795266914.626002833 Waiting for readiness...
-1795266925.346423213 === Restore complete ===
-1795266925.393392630 {"status":"ok","version":"v0.1.4-255-g00854be","commit":"00854be","uptime_s":0,"integrity":"ok","disk_free_bytes":1584481202176,"database":{"freelist_count":0,"page_count":180,"size_bytes":667648,"wal_bytes":362592}}
-1795266925.409577921 
-WALL 1795266913.521094305 1795266925.430708588
+1795270488.302617088 === Restoring from /opt/holzcloud/backups/20261121-141407 ===
+1795270488.332649047 timestamp=20261121-141407
+1795270488.354866714 version=holzcloud v0.1.1 (5bcae9b)
+1795270488.380400880 data_dir=/opt/holzcloud/data
+1795270488.402844130 host=d2d1bc24e975
+1795270488.423968589 NOTICE: /opt/holzcloud/backups/20261121-141407 has no checksum file (made before 0.1.5); its files were not verified
+1795270488.453830714 Verifying snapshot...
+1795270488.770740797 2026/11/21 14:14:48 INFO sqlite opened journal_mode=wal path=/tmp/tmp.G0PVKINhfy/holzcloud.sqlite
+1795270488.793895630 2026/11/21 14:14:48 INFO migration applied version=61 type=sql duration_ms=18
+1795270488.820879130 2026/11/21 14:14:48 INFO migration applied version=62 type=sql duration_ms=3
+1795270488.841901380 2026/11/21 14:14:48 INFO migration applied version=63 type=sql duration_ms=8
+1795270488.864876047 2026/11/21 14:14:48 INFO migration applied version=64 type=sql duration_ms=1
+1795270488.889866089 2026/11/21 14:14:48 INFO migration applied version=65 type=sql duration_ms=0
+1795270488.917202172 2026/11/21 14:14:48 INFO migration applied version=66 type=sql duration_ms=0
+1795270488.942475505 2026/11/21 14:14:48 INFO migration applied version=67 type=sql duration_ms=4
+1795270488.979490380 2026/11/21 14:14:48 INFO migration applied version=68 type=sql duration_ms=4
+1795270489.007956422 2026/11/21 14:14:48 INFO migration applied version=69 type=sql duration_ms=5
+1795270489.039678256 integrity: ok
+1795270489.060549381 files: 3 rows checked, 0 missing
+1795270489.086892964 Stopping holzcloud...
+1795270489.109451797 Moving current data to /opt/holzcloud/data.before-restore-20261121-141448
+1795270489.137811881 Restoring database...
+1795270489.172467256 Restoring CSRF key...
+1795270489.191605172 Restoring media...
+1795270489.230056006 Restoring plugins...
+1795270489.491412714 Starting holzcloud...
+1795270489.548681922 Waiting for readiness...
+1795270502.749580304 === Restore complete ===
+1795270502.802876720 {"status":"ok","version":"v0.1.4-261-gcefe4ac","commit":"cefe4ac","uptime_s":1,"integrity":"ok","disk_free_bytes":1584480804864,"database":{"freelist_count":0,"page_count":180,"size_bytes":667648,"wal_bytes":362592}}
+1795270502.833908012 
+WALL 1795270488.107763797 1795270502.877167554
 ```
 
 #### amd64-t34-mig-src/mig-journal.txt
 
 ```text
-{"time":"2026-11-21T13:15:14.835680166Z","level":"INFO","msg":"pre-upgrade snapshot written","path":"/opt/holzcloud/data/pre-upgrade-v0.1.4-255-g00854be-20261121-131514.sqlite","level":60}
-{"time":"2026-11-21T13:15:14.90584825Z","level":"INFO","msg":"migration applied","version":61,"type":"sql","duration_ms":7}
-{"time":"2026-11-21T13:15:14.907282Z","level":"INFO","msg":"migration applied","version":62,"type":"sql","duration_ms":0}
-{"time":"2026-11-21T13:15:14.907287916Z","level":"INFO","msg":"migration applied","version":63,"type":"sql","duration_ms":4}
-{"time":"2026-11-21T13:15:14.907291083Z","level":"INFO","msg":"migration applied","version":64,"type":"sql","duration_ms":0}
-{"time":"2026-11-21T13:15:14.90729325Z","level":"INFO","msg":"migration applied","version":65,"type":"sql","duration_ms":0}
-{"time":"2026-11-21T13:15:14.907295333Z","level":"INFO","msg":"migration applied","version":66,"type":"sql","duration_ms":0}
-{"time":"2026-11-21T13:15:14.907297541Z","level":"INFO","msg":"migration applied","version":67,"type":"sql","duration_ms":4}
-{"time":"2026-11-21T13:15:14.907299916Z","level":"INFO","msg":"migration applied","version":68,"type":"sql","duration_ms":4}
-{"time":"2026-11-21T13:15:14.907302041Z","level":"INFO","msg":"migration applied","version":69,"type":"sql","duration_ms":5}
+{"time":"2026-11-21T14:14:49.876991714Z","level":"INFO","msg":"pre-upgrade snapshot written","path":"/opt/holzcloud/data/pre-upgrade-v0.1.4-261-gcefe4ac-20261121-141449.sqlite","level":60}
+{"time":"2026-11-21T14:14:49.932408506Z","level":"INFO","msg":"migration applied","version":61,"type":"sql","duration_ms":10}
+{"time":"2026-11-21T14:14:49.934048714Z","level":"INFO","msg":"migration applied","version":62,"type":"sql","duration_ms":0}
+{"time":"2026-11-21T14:14:49.934056214Z","level":"INFO","msg":"migration applied","version":63,"type":"sql","duration_ms":4}
+{"time":"2026-11-21T14:14:49.934059548Z","level":"INFO","msg":"migration applied","version":64,"type":"sql","duration_ms":0}
+{"time":"2026-11-21T14:14:49.934062339Z","level":"INFO","msg":"migration applied","version":65,"type":"sql","duration_ms":0}
+{"time":"2026-11-21T14:14:49.934064548Z","level":"INFO","msg":"migration applied","version":66,"type":"sql","duration_ms":0}
+{"time":"2026-11-21T14:14:49.934066964Z","level":"INFO","msg":"migration applied","version":67,"type":"sql","duration_ms":9}
+{"time":"2026-11-21T14:14:49.934069506Z","level":"INFO","msg":"migration applied","version":68,"type":"sql","duration_ms":4}
+{"time":"2026-11-21T14:14:49.934072298Z","level":"INFO","msg":"migration applied","version":69,"type":"sql","duration_ms":5}
 ```
 
 #### amd64-t34-mig-src/mig-check.txt
@@ -346,27 +346,27 @@ PASS invoke bestellung
 PASS invoke suche
 PASS invoke nicht-gefunden
 PASS stable
-engine: compiler (9 anonymous executable mappings)
+engine: compiler (11 anonymous executable mappings)
 # hook budget CallTimeout is 2 s (internal/plugin/runtime.go); the medians are of ten requests
-LATENCY /plugintest median_s=0.015807 n=10
-LATENCY /suche?q=Plugintest median_s=0.014331 n=10
-LATENCY /formular median_s=0.010021 n=10
-LATENCY /bestellung median_s=0.009774 n=10
+LATENCY /plugintest median_s=0.017325 n=10
+LATENCY /suche?q=Plugintest median_s=0.015193 n=10
+LATENCY /formular median_s=0.010560 n=10
+LATENCY /bestellung median_s=0.010583 n=10
 Seccomp:	0
 Seccomp_filters:	0
 NRestarts=0
 Result=success
-{"time":"2026-11-21T13:15:31.030938632Z","level":"INFO","msg":"plugin loaded","plugin":"kontaktformular","version":"1.5.0"}
-{"time":"2026-11-21T13:15:32.907103592Z","level":"INFO","msg":"plugin loaded","plugin":"bestellung","version":"1.0.0"}
-{"time":"2026-11-21T13:15:34.299587051Z","level":"INFO","msg":"plugin loaded","plugin":"nicht-gefunden","version":"1.0.0"}
-{"time":"2026-11-21T13:15:35.635044218Z","level":"INFO","msg":"plugin loaded","plugin":"suche","version":"1.0.0"}
-{"time":"2026-11-21T13:15:36.940699802Z","level":"INFO","msg":"plugin loaded","plugin":"jahreszahl","version":"1.0.0"}
+{"time":"2026-11-21T14:15:08.973601417Z","level":"INFO","msg":"plugin loaded","plugin":"kontaktformular","version":"1.5.0"}
+{"time":"2026-11-21T14:15:10.929511502Z","level":"INFO","msg":"plugin loaded","plugin":"bestellung","version":"1.0.0"}
+{"time":"2026-11-21T14:15:12.370521086Z","level":"INFO","msg":"plugin loaded","plugin":"nicht-gefunden","version":"1.0.0"}
+{"time":"2026-11-21T14:15:13.754449461Z","level":"INFO","msg":"plugin loaded","plugin":"suche","version":"1.0.0"}
+{"time":"2026-11-21T14:15:15.101226545Z","level":"INFO","msg":"plugin loaded","plugin":"jahreszahl","version":"1.0.0"}
 ```
 
 #### amd64-t34-evidence-commit.txt
 
 ```text
-00854be
+cefe4ac
 ```
 
 #### amd64-t34-pass1.status
