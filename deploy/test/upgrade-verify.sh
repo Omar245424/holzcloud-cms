@@ -1265,13 +1265,14 @@ syn_commit_build() {
   say "synthetic build ($3): $line"
   (cd "$src" && bash -c "$line") || die "synthetic build: the Build line failed"
   [ -f "$src/holzcloud" ] || die "synthetic build: the Build line produced no holzcloud file"
-  mv "$src/holzcloud" "$bin"
+  mv "$src/holzcloud" "$bin" || die "synthetic build: moving the binary to $bin failed"
+  [ -f "$bin" ] || die "synthetic build: $bin is not the built binary"
   {
     echo "version: $(git -C "$src" describe --tags --always)"
     echo "commit: $(git -C "$src" rev-parse --short HEAD)"
     echo "sha256: $(shasum -a 256 "$bin" | awk '{ print $1 }')"
     echo "migrations: $(ls "$src/internal/db/migrations" | grep -c '\.sql$')"
-  } > "$bin.info"
+  } > "$bin.info" || die "synthetic build: writing $bin.info failed"
 }
 
 # info_of BIN KEY: one value of BIN.info.
@@ -1284,17 +1285,29 @@ info_of() { sed -n "s/^$2: //p" "$1.info" | head -n 1; }
 syn_build_rb() {
   local d=$1 b0
   b0=$(migrations_at "$NEW_REF")
-  mkdir -p "$d/syn"
+  mkdir -p "$d/syn" || die "rb: cannot create $d/syn"
+  # Every step is checked by hand: bash ignores `set -e` in a subshell that is
+  # the left side of `||`, and a step that failed silently (an empty tmp from
+  # mktemp, above all) would clone outside any scratch directory.
   (
-    set -e
-    tmp=$(mktemp -d "${TMPDIR:-/tmp}/t34-syn-rb.XXXXXX")
+    tmp=$(syn_scratch rb) || exit 1
     trap 'rm -rf "${tmp:?}"' EXIT
-    syn_clone "$tmp"
-    syn_migration "$tmp" "$((b0 + 1))" t34_ok "CREATE TABLE t34_ok (id INTEGER PRIMARY KEY) STRICT;"
+    syn_clone "$tmp" || exit 1
+    syn_migration "$tmp" "$((b0 + 1))" t34_ok "CREATE TABLE t34_ok (id INTEGER PRIMARY KEY) STRICT;" || exit 1
     syn_migration "$tmp" "$((b0 + 2))" t34_fail "CREATE TABLE t34_half (id INTEGER PRIMARY KEY) STRICT;" \
-      "INSERT INTO t34_no_such_table VALUES (1);"
-    syn_commit_build "$tmp" "$d/syn/holzcloud-f" "t34: F, a migration that succeeds and one that fails part-way"
+      "INSERT INTO t34_no_such_table VALUES (1);" || exit 1
+    syn_commit_build "$tmp" "$d/syn/holzcloud-f" "t34: F, a migration that succeeds and one that fails part-way" || exit 1
   ) || die "rb: the synthetic build F failed"
+}
+
+# syn_scratch KIND: a new scratch directory $TMPDIR/t34-syn-KIND.XXXXXX for a
+# synthetic build's clone, its path printed; fails, printing nothing, unless
+# mktemp made a directory.
+syn_scratch() {
+  local t
+  t=$(mktemp -d "${TMPDIR:-/tmp}/t34-syn-$1.XXXXXX") || return 1
+  [ -n "$t" ] && [ -d "$t" ] || return 1
+  printf '%s\n' "$t"
 }
 
 # ---------------------------------------------------------------------------
@@ -1574,15 +1587,15 @@ stage_rb() {
 syn_build_upd() {
   local d=$1 b0 k
   b0=$(migrations_at "$NEW_REF")
-  mkdir -p "$d/syn"
+  mkdir -p "$d/syn" || die "upd: cannot create $d/syn"
+  # Checked by hand, as in syn_build_rb.
   (
-    set -e
-    tmp=$(mktemp -d "${TMPDIR:-/tmp}/t34-syn-upd.XXXXXX")
+    tmp=$(syn_scratch upd) || exit 1
     trap 'rm -rf "${tmp:?}"' EXIT
-    syn_clone "$tmp"
+    syn_clone "$tmp" || exit 1
     for k in 1 2 3 4 5 6; do
-      syn_migration "$tmp" "$((b0 + k))" "t34_noop_$k" "CREATE TABLE t34_noop_$k (id INTEGER PRIMARY KEY) STRICT;"
-      syn_commit_build "$tmp" "$d/syn/holzcloud-syn-$k" "t34: synthetic build $k, the no-op migrations 1 to $k"
+      syn_migration "$tmp" "$((b0 + k))" "t34_noop_$k" "CREATE TABLE t34_noop_$k (id INTEGER PRIMARY KEY) STRICT;" || exit 1
+      syn_commit_build "$tmp" "$d/syn/holzcloud-syn-$k" "t34: synthetic build $k, the no-op migrations 1 to $k" || exit 1
     done
   ) || die "upd: the synthetic builds failed"
   {
@@ -2894,6 +2907,42 @@ selftest_binary_source() {
   fi
 }
 
+# The synthetic builds fail closed (IN-02 of the phase 34 review): bash ignores
+# `set -e` in a subshell that is the left side of `||`, so each step is checked
+# by hand. syn_clone is stubbed for the mktemp cases, so a build that went on
+# would only print where it would have cloned, never clone.
+selftest_syn_fail_closed() {
+  local d=$ST_TMP/syn out rc b
+  rm -rf "${d:?}"
+  mkdir -p "$d"
+  for b in syn_build_rb syn_build_upd; do
+    out=$( (
+      NEW_REF=$(git rev-parse --short HEAD)
+      TMPDIR=$d/no-such-dir
+      export TMPDIR
+      syn_clone() { echo "CLONE:$1"; }
+      syn_migration() { :; }
+      syn_commit_build() { :; }
+      "$b" "$d/$b"
+    ) 2> /dev/null) && rc=0 || rc=$?
+    st_eq "$b: a failing mktemp ends the build" 1 "$rc"
+    case "$out" in
+      *CLONE:*) st_eq "$b: a failing mktemp clones nothing" "" "$out" ;;
+      *) st_eq "$b: a failing mktemp clones nothing" "" "" ;;
+    esac
+  done
+  # A mv of the built binary that fails ends the build, although the .info file
+  # beside it could still be written.
+  mkdir -p "$d/m/src/internal/db/migrations" "$d/bin/holzcloud-x/holzcloud/keep"
+  git -C "$d/m/src" init -q
+  echo "-- x" > "$d/m/src/internal/db/migrations/00001_x.sql"
+  out=$( (
+    doc_block() { echo 'touch holzcloud'; }
+    syn_commit_build "$d/m" "$d/bin/holzcloud-x" "t34: selftest"
+  ) 2>&1) && rc=0 || rc=$?
+  st_eq "syn_commit_build: a failing mv ends the build" 1 "$rc"
+}
+
 cmd_selftest() {
   ST_N=0
   ST_BAD=0
@@ -2917,6 +2966,7 @@ cmd_selftest() {
   selftest_prune_expect
   selftest_verdict_upd01
   selftest_binary_source
+  selftest_syn_fail_closed
   if [ "$ST_BAD" -ne 0 ]; then
     echo "SELFTEST FAILED: $ST_BAD of $ST_N cases"
     exit 1
