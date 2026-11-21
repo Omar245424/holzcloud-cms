@@ -4,9 +4,23 @@
 #
 #   bash deploy/test/34-check.sh RULE...
 #
-# RULE is one of quotes, coverage, ledger, nojs, selftest:
+# RULE is one of frozen, quotes, coverage, ledger, nojs, record, all, selftest:
 #
-# quotes    every required row of docs/beta.md (REQUIRED_ROWS) exists once, names one of
+# frozen    the evidence still holds: each record of RECORDS has exactly one
+#           `Evidence commit:` line naming a commit of ROOT, and between that commit and
+#           HEAD neither the bound files of its driver nor the source of the binary (cmd,
+#           internal, go.mod, go.sum, changelog.go, CHANGELOG.md) changed. The bound files
+#           are read from the `BOUND_FILES=` line of the driver that made the record
+#           (deploy/test/upgrade-verify.sh for the three container records,
+#           deploy/test/browser-verify.sh for deploy/BROWSER-RUN.md,
+#           deploy/test/backup-verify.sh for deploy/BACKUP-VERIFY-RUN.md), so the list here
+#           cannot drift from the list the driver refuses to run without. And the files the
+#           phase changed (BASE...TIP) are exactly PHASE_FILES. BASE is required; the rule
+#           refuses to run without it. TIP is HEAD unless set; after the merge of phase 34
+#           it is set to that merge, as 32-check.sh does for phase 32, and it only moves
+#           the list of the phase's files: the bound files and the binary's source are
+#           always compared with HEAD.
+# quotes   every required row of docs/beta.md (REQUIRED_ROWS) exists once, names one of
 #           the records of 0.1.5 (RECORDS) in its Record column, and every phrase of its
 #           Cited words column is found in that record by grep -F, byte for byte. A phrase
 #           is a sentence between straight double quotes or a backticked token outside
@@ -29,6 +43,15 @@
 #           *.cjs) is exactly JS_ALLOWED, the htmx file: the browser record of phase 34
 #           ran a Playwright script, and that script is pasted into the record, never
 #           committed as a file.
+# record    when E holds amd64-t34-summary.txt and mac-t34-uat, the record-check of
+#           deploy/test/upgrade-verify.sh for each of its three records and that of
+#           deploy/test/browser-verify.sh prove the records against their scratch files,
+#           and when E32 holds amd64-t32-src, the gate of phase 32 runs whole after its
+#           merge (`BASE=e1116b3 TIP=93bfb80 E="$E32" bash deploy/test/32-check.sh all`),
+#           which runs the record-check of deploy/test/backup-verify.sh. Every one must end
+#           OK. When a scratch root is missing the rule prints `SKIP record: …` and is
+#           counted as skipped in the last line, never as passed.
+# all       frozen, quotes, coverage, ledger, nojs, record, in that order.
 # selftest  one negative case per rule, each beside a control that passes, on copies in a
 #           temporary directory; the real files are never written.
 #
@@ -44,7 +67,16 @@
 #            worktree and from a copy of the file elsewhere.
 #   REC_ROOT where the records are read from; default ROOT. The names in RECORDS are
 #            relative to it.
+#   BASE     the commit the phase branched from (frozen only), for example
+#            BASE=$(git merge-base origin/main HEAD)
+#   TIP      the end of the phase's change (frozen only); default HEAD
 #   BETA     the page of promises; default $ROOT/docs/beta.md
+#   E        the scratch root of the evidence sets of phase 34, amd64-t34-* and mac-t34-*
+#            (record only); default $ROOT/deploy/test/out
+#   E32      the scratch root of the evidence set of phase 32, amd64-t32-* (record only);
+#            default $ROOT/deploy/test/out
+#   PHASE_FILES  the files the phase changed, one per line; default the list below. Only
+#            the selftest sets it.
 #   JS_ALLOWED  the tracked JavaScript allowed (nojs only); default
 #            cmd/holzcloud/assets/htmx.min.js. Only the selftest sets it to empty.
 #
@@ -64,6 +96,36 @@ ME="$HERE/$(basename "$0")"
 REC_ROOT=${REC_ROOT:-$ROOT}
 BETA=${BETA:-$ROOT/docs/beta.md}
 JS_ALLOWED=${JS_ALLOWED-cmd/holzcloud/assets/htmx.min.js}
+E=${E:-$ROOT/deploy/test/out}
+E32=${E32:-$ROOT/deploy/test/out}
+BASE=${BASE:-}
+TIP=${TIP:-HEAD}
+
+# The source of the binary under test, as the drivers name it (BINARY_SOURCE).
+BINARY_SRC="cmd internal go.mod go.sum changelog.go CHANGELOG.md"
+
+# Every file phase 34 changed, sorted as `sort` prints them under LC_ALL=C. The frozen rule
+# compares the real change BASE...TIP with it, name for name.
+PHASE_FILES=${PHASE_FILES:-"cmd/holzcloud/cli.go
+cmd/holzcloud/deploy_docs_test.go
+cmd/holzcloud/main.go
+cmd/holzcloud/schema_guard_test.go
+deploy/BACKUP-VERIFY-RUN.md
+deploy/BROWSER-RUN.md
+deploy/DEPLOY.md
+deploy/MIGRATION-RESTORE-RUN.md
+deploy/ROLLBACK-RUN.md
+deploy/UPDATE-CHAIN-RUN.md
+deploy/test/32-check.sh
+deploy/test/34-check.sh
+deploy/test/README.md
+deploy/test/browser-verify.sh
+deploy/test/upgrade-verify.sh
+docs/beta.md
+internal/db/db.go
+internal/db/partial_migration_test.go
+internal/plugin/runtime.go
+internal/plugin/runtime_test.go"}
 
 # The records of 0.1.5, relative to REC_ROOT.
 RECORDS="deploy/MIGRATION-RESTORE-RUN.md deploy/UPDATE-CHAIN-RUN.md deploy/ROLLBACK-RUN.md deploy/BROWSER-RUN.md deploy/BACKUP-VERIFY-RUN.md"
@@ -113,6 +175,23 @@ short() { printf '%s' "$1" | cut -c1-100; }
 # is_record NAME : NAME is one of RECORDS.
 is_record() { case " $RECORDS " in *" $1 "*) return 0 ;; esac; return 1; }
 
+# driver_of RECORD : the driver that made the record and names its bound files.
+driver_of() {
+  case "$1" in
+    deploy/MIGRATION-RESTORE-RUN.md | deploy/UPDATE-CHAIN-RUN.md | deploy/ROLLBACK-RUN.md) echo deploy/test/upgrade-verify.sh ;;
+    deploy/BROWSER-RUN.md) echo deploy/test/browser-verify.sh ;;
+    deploy/BACKUP-VERIFY-RUN.md) echo deploy/test/backup-verify.sh ;;
+    *) return 1 ;;
+  esac
+}
+# bound_of DRIVER : the files of the driver's single `BOUND_FILES="…"` line.
+bound_of() {
+  [ "$(grep -c '^BOUND_FILES=' "$ROOT/$1")" = 1 ] || return 1
+  sed -n 's/^BOUND_FILES="\(.*\)"$/\1/p' "$ROOT/$1"
+}
+# not_in A B : the lines of A that are not lines of B.
+not_in() { printf '%s\n' "$1" | while IFS= read -r l; do [ -n "$l" ] || continue; printf '%s\n' "$2" | grep -qxF -- "$l" || printf '%s ' "$l"; done; }
+
 # section2 HEADING-ERE < FILE : the lines under a level-two heading, up to the next one.
 section2() {
   awk -v re="$1" '
@@ -141,6 +220,48 @@ ledger_rows() {
 }
 
 # --------------------------------------------------------------- rules ----
+
+rule_frozen() {
+  if [ -z "$BASE" ]; then
+    fail "frozen: BASE is required (the commit the phase branched from, e.g. the merge base of origin/main and HEAD)"
+    return 2
+  fi
+  git -C "$ROOT" rev-parse -q --verify "$BASE^{commit}" > /dev/null || { fail "frozen: BASE '$BASE' is not a commit of $ROOT"; return 2; }
+  git -C "$ROOT" rev-parse -q --verify "$TIP^{commit}" > /dev/null || { fail "frozen: TIP '$TIP' is not a commit of $ROOT"; return 2; }
+  local rec f n sha drv bound moved got want held="" nb
+  for rec in $RECORDS; do
+    f="$REC_ROOT/$rec"
+    need "$f" || continue
+    n=$(grep -c '^Evidence commit: ' "$f")
+    [ "$n" = 1 ] || { fail "frozen: $rec has $n 'Evidence commit:' lines, want exactly one"; continue; }
+    sha=$(sed -n 's/^Evidence commit: \([0-9a-f]*\)$/\1/p' "$f")
+    if [ -z "$sha" ] || ! git -C "$ROOT" rev-parse -q --verify "$sha^{commit}" > /dev/null; then
+      fail "frozen: the Evidence commit '$sha' of $rec is not a commit of $ROOT"
+      continue
+    fi
+    drv=$(driver_of "$rec") || { fail "frozen: no driver is known for $rec"; continue; }
+    bound=$(bound_of "$drv") || { fail "frozen: $drv has no single BOUND_FILES= line"; continue; }
+    [ -n "$bound" ] || { fail "frozen: the BOUND_FILES= line of $drv is empty"; continue; }
+    # shellcheck disable=SC2086
+    if ! git -C "$ROOT" diff --quiet "$sha" HEAD -- $bound; then
+      moved=$(git -C "$ROOT" diff --name-only "$sha" HEAD -- $bound | tr '\n' ' ')
+      fail "frozen: $rec: a bound file moved since the evidence commit $sha: $moved"
+    fi
+    # shellcheck disable=SC2086
+    if ! git -C "$ROOT" diff --quiet "$sha" HEAD -- $BINARY_SRC; then
+      moved=$(git -C "$ROOT" diff --name-only "$sha" HEAD -- $BINARY_SRC | tr '\n' ' ')
+      fail "frozen: $rec: the source of the binary moved since the evidence commit $sha: $moved"
+    fi
+    nb=$(printf '%s\n' $bound | grep -c .)
+    held="$held, ${rec#deploy/} at $sha ($nb bound files of $(basename "$drv"))"
+  done
+  got=$(git -C "$ROOT" diff --name-only "$BASE...$TIP" | sort)
+  want=$(printf '%s\n' "$PHASE_FILES" | grep . | sort)
+  if [ "$got" != "$want" ]; then
+    fail "frozen: the files changed in $BASE...$TIP (TIP $TIP) are not the files of the phase; extra: $(not_in "$got" "$want")missing: $(not_in "$want" "$got")"
+  fi
+  [ "$RULE_FAIL" = 0 ] && ok "frozen: the bound files and $BINARY_SRC unchanged since the evidence commit of each record (${held#, }), and $BASE...$TIP changed exactly the $(printf '%s\n' "$want" | grep -c .) files of the phase"
+}
 
 rule_quotes() {
   need "$BETA" || return 2
@@ -235,6 +356,44 @@ rule_nojs() {
   ok "nojs: the tracked JavaScript is exactly $JS_ALLOWED"
 }
 
+# run_ok DESC PREFIX CMD... : run CMD in ROOT; its last line must begin with PREFIX.
+run_ok() {
+  local desc="$1" want="$2" out last
+  shift 2
+  out=$(cd "$ROOT" && "$@" 2>&1)
+  last=$(printf '%s\n' "$out" | tail -n 1)
+  case "$last" in
+    "$want"*) echo "ok: record: $desc: $last" ;;
+    *)
+      printf '%s\n' "$out" | tail -n 5
+      fail "record: $desc did not end '$want…'"
+      ;;
+  esac
+}
+
+rule_record() {
+  local missing="" rec
+  if [ -f "$E/amd64-t34-summary.txt" ] && [ -d "$E/mac-t34-uat" ]; then
+    for rec in deploy/MIGRATION-RESTORE-RUN.md deploy/UPDATE-CHAIN-RUN.md deploy/ROLLBACK-RUN.md; do
+      run_ok "upgrade-verify.sh record-check of $rec" 'RECORD-CHECK OK (' env R="$REC_ROOT/$rec" E="$E" bash deploy/test/upgrade-verify.sh record-check
+    done
+    run_ok "browser-verify.sh record-check of deploy/BROWSER-RUN.md" 'RECORD-CHECK OK (' env R="$REC_ROOT/deploy/BROWSER-RUN.md" E="$E" bash deploy/test/browser-verify.sh record-check
+  else
+    missing="$missing E ($E holds no amd64-t34-summary.txt and mac-t34-uat)"
+  fi
+  if [ -d "$E32/amd64-t32-src" ]; then
+    run_ok "32-check.sh all after the merge of phase 32" '32-CHECK OK (5 rules)' env BASE=e1116b3 TIP=93bfb80 E="$E32" bash deploy/test/32-check.sh all
+  else
+    missing="$missing E32 ($E32 holds no amd64-t32-src)"
+  fi
+  [ "$RULE_FAIL" = 0 ] || return 1
+  if [ -n "$missing" ]; then
+    echo "SKIP record: no scratch files under$missing"
+    return "$SKIP"
+  fi
+  ok "record: the record-checks of the four records of phase 34 and the gate of phase 32 ended OK"
+}
+
 # ------------------------------------------------------------- selftest ----
 
 ST_N=0
@@ -272,9 +431,21 @@ t_row_sub() {
 }
 
 selftest() {
-  local T
+  local T base tip rec less
   T=$(mktemp -d "$TMPROOT/st.XXXXXX")
   cp "$BETA" "$T/good.md"
+  base=${BASE:-$(git -C "$ROOT" merge-base origin/main HEAD 2> /dev/null)}
+  base=$(git -C "$ROOT" rev-parse -q --verify "$base^{commit}" 2> /dev/null)
+  tip=${TIP:-HEAD}
+  # frozen
+  st_run 'frozen: control, the records as they are' 0 'ok: frozen' "BASE=$base" "TIP=$tip" -- frozen
+  mkdir -p "$T/rec/deploy"
+  for rec in $RECORDS; do cp "$REC_ROOT/$rec" "$T/rec/$rec"; done
+  sed "s/^Evidence commit: .*/Evidence commit: $base/" "$REC_ROOT/deploy/MIGRATION-RESTORE-RUN.md" > "$T/rec/deploy/MIGRATION-RESTORE-RUN.md"
+  st_run 'frozen: the Evidence commit of a record replaced by BASE' 1 'frozen: deploy/MIGRATION-RESTORE-RUN.md: a bound file moved since the evidence commit' "BASE=$base" "TIP=$tip" "REC_ROOT=$T/rec" -- frozen
+  less=$(printf '%s\n' "$PHASE_FILES" | grep -vxF 'docs/beta.md')
+  st_run 'frozen: the list of the phase without docs/beta.md' 1 'extra: docs/beta.md' "BASE=$base" "TIP=$tip" "PHASE_FILES=$less" -- frozen
+  st_run 'frozen: no BASE' 2 'frozen: BASE is required' "BASE=" "TIP=$tip" -- frozen
   # quotes
   st_run 'quotes: control, the page as it is' 0 'ok: quotes' "BETA=$T/good.md" -- quotes
   t_row_append P-27 'NO SUCH PHRASE 34' < "$T/good.md" > "$T/q-absent.md"
@@ -302,6 +473,12 @@ selftest() {
   # nojs
   st_run 'nojs: control, the repository as it is' 0 'ok: nojs' -- nojs
   st_run 'nojs: no JavaScript allowed, so the htmx file is one too many' 1 'nojs: the tracked JavaScript is not exactly' "JS_ALLOWED=" -- nojs
+  # record
+  mkdir -p "$T/empty-e" "$T/bad-e/mac-t34-uat"
+  : > "$T/bad-e/amd64-t34-summary.txt"
+  st_run 'record: E and E32 are empty directories, so the rule is skipped and not passed' 0 'SKIP record: no scratch files under' "E=$T/empty-e" "E32=$T/empty-e" -- record
+  st_run 'record: a skipped rule is counted as skipped in the last line' 0 '34-CHECK OK (0 rules, 1 skipped)' "E=$T/empty-e" "E32=$T/empty-e" -- record
+  st_run 'record: E holds an empty set, so the record-check fails' 1 'record: upgrade-verify.sh record-check of deploy/MIGRATION-RESTORE-RUN.md did not end' "E=$T/bad-e" "E32=$T/empty-e" -- record
   if [ "$ST_K" = 0 ]; then
     echo "SELFTEST OK ($ST_N cases)"
     return 0
@@ -312,7 +489,7 @@ selftest() {
 
 # ----------------------------------------------------------------- main ----
 
-usage() { echo "usage: 34-check.sh quotes|coverage|ledger|nojs ... | selftest" >&2; exit 2; }
+usage() { echo "usage: 34-check.sh frozen|quotes|coverage|ledger|nojs|record|all ... | selftest" >&2; exit 2; }
 [ "$#" -gt 0 ] || usage
 if [ "$1" = selftest ]; then
   [ "$#" = 1 ] || usage
@@ -323,7 +500,8 @@ fi
 RULES=""
 for a in "$@"; do
   case "$a" in
-    quotes | coverage | ledger | nojs) RULES="$RULES $a" ;;
+    frozen | quotes | coverage | ledger | nojs | record) RULES="$RULES $a" ;;
+    all) RULES="$RULES frozen quotes coverage ledger nojs record" ;;
     *) usage ;;
   esac
 done
