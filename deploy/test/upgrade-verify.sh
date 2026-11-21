@@ -833,6 +833,230 @@ cmd_down() {
 }
 
 # ---------------------------------------------------------------------------
+# The records (plan 34-05 and 34-07 run these; they are here so that the driver
+# bound by the evidence is the one that checks it). They never rely on `set -e`,
+# print one line per problem and end on an answer line.
+# ---------------------------------------------------------------------------
+
+# paste_list STAGE: DIRECTORY/FILE (or FILE, for the run files) of the appendix of
+# the record of STAGE, in order. A list, never a glob: the logs, the .lst scratch
+# files, baseline.txt, seed.txt, steps.txt, the plugin archives, the old scripts
+# and every key, password or cookie file are not on it.
+paste_list() {
+  case "${1:-}" in
+    mig)
+      printf '%s\n' \
+        amd64-t34-summary.txt \
+        amd64-t34-mig-src/versions.txt \
+        amd64-t34-mig-src/deviations.txt \
+        amd64-t34-mig-src/mig.txt \
+        amd64-t34-mig-src/mig-backup.out \
+        amd64-t34-mig-src/mig-restore.out \
+        amd64-t34-mig-src/mig-journal.txt \
+        amd64-t34-mig-src/mig-check.txt \
+        amd64-t34-evidence-commit.txt \
+        amd64-t34-pass1.status
+      ;;
+    upd)
+      printf '%s\n' \
+        amd64-t34-summary.txt \
+        amd64-t34-upd/versions.txt \
+        amd64-t34-upd/deviations.txt \
+        amd64-t34-upd/upd.txt \
+        amd64-t34-upd/upd-builds.txt \
+        amd64-t34-upd/upd-1.out \
+        amd64-t34-upd/upd-2.out \
+        amd64-t34-upd/upd-3.out \
+        amd64-t34-upd/upd-4.out \
+        amd64-t34-upd/upd-5.out \
+        amd64-t34-upd/upd-6.out \
+        amd64-t34-upd/upd-snapshots.txt \
+        amd64-t34-evidence-commit.txt \
+        amd64-t34-pass1.status
+      ;;
+    rb)
+      printf '%s\n' \
+        amd64-t34-summary.txt \
+        amd64-t34-rb/versions.txt \
+        amd64-t34-rb/deviations.txt \
+        amd64-t34-rb/rb.txt \
+        amd64-t34-rb/rb-update.out \
+        amd64-t34-rb/rb-journal.txt \
+        amd64-t34-rb/rb-snapshots.txt \
+        amd64-t34-rb/rb-guard.txt \
+        amd64-t34-rb/rb-rollback.out \
+        amd64-t34-rb/rb-state.txt \
+        amd64-t34-evidence-commit.txt \
+        amd64-t34-pass1.status
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# record_stage R: the stage whose record R is (mig, upd or rb), from its file name
+# under deploy/; fails for any other file.
+record_stage() {
+  case "${1:-}" in
+    deploy/MIGRATION-RESTORE-RUN.md | */deploy/MIGRATION-RESTORE-RUN.md) echo mig ;;
+    deploy/UPDATE-CHAIN-RUN.md | */deploy/UPDATE-CHAIN-RUN.md) echo upd ;;
+    deploy/ROLLBACK-RUN.md | */deploy/ROLLBACK-RUN.md) echo rb ;;
+    *) return 1 ;;
+  esac
+}
+
+# appendix_print STAGE E: the blocks of the paste list of STAGE from the files
+# below E, each "#### NAME", a blank line and a fenced text block. Refuses (prints
+# nothing) when a file is missing or holds a line that would end a fence or open
+# a heading.
+appendix_print() {
+  local st=${1:-} e=${2:-deploy/test/out} p bad=0 list
+  list=$(paste_list "$st") || {
+    say "upgrade-verify.sh: appendix: the stage must be mig, upd or rb (got '$st')"
+    return 2
+  }
+  for p in $list; do
+    if [ ! -f "$e/$p" ]; then
+      say "upgrade-verify.sh: appendix: no scratch file $e/$p"
+      bad=$((bad + 1))
+    elif grep -Eq '^(```|#### |## )' "$e/$p"; then
+      say "upgrade-verify.sh: appendix: $e/$p has a line that begins with three backticks, with '#### ' or with '## '; it cannot be pasted unchanged"
+      bad=$((bad + 1))
+    fi
+  done
+  if [ "$bad" -ne 0 ]; then
+    return 1
+  fi
+  for p in $list; do
+    printf '#### %s\n\n' "$p"
+    printf '%s\n' '```text'
+    awk 1 "$e/$p"
+    printf '%s\n\n' '```'
+  done
+}
+
+# t34_record_check R E STAGE: the record R against the scratch root E, with the
+# paste list of STAGE.
+#  - every "#### NAME" block under "## Appendix: raw output" equals E/NAME byte for
+#    byte, and every file of the paste list has a block;
+#  - every `amd64-t34-.../FILE` token in backticks outside the appendix has a block
+#    (a file that is not pasted is named as "FILE in DIRECTORY");
+#  - exactly one line "Evidence commit: SHA"; SHA resolves, is the pinned commit of
+#    E/amd64-t34-evidence-commit.txt, and no bound file nor cmd, internal, go.mod or
+#    go.sum differs between SHA and HEAD;
+#  - the pasted summary is not a rehearsal's; no line holds a private-key marker.
+t34_record_check() {
+  local r=${1:-} e=${2:-} st=${3:-} n=0 k=0 tmp i name sha pinned p tok bf list
+  rc_bad() {
+    k=$((k + 1))
+    printf 'RECORD-CHECK BAD %s\n' "$*"
+  }
+  if ! list=$(paste_list "$st"); then
+    printf 'RECORD-CHECK BAD no paste list for the stage %s\n' "$st"
+    echo "RECORD-CHECK FAILED (1 of 1)"
+    return 1
+  fi
+  if [ ! -f "$r" ]; then
+    printf 'RECORD-CHECK BAD no record %s\n' "$r"
+    echo "RECORD-CHECK FAILED (1 of 1)"
+    return 1
+  fi
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/t34-record.XXXXXX") || return 1
+  # Split the appendix into numbered block files and a list "INDEX NAME".
+  awk -v d="$tmp" '
+    $0 == "## Appendix: raw output" { app = 1; next }
+    app && /^## / { app = 0 }
+    !app { next }
+    infence && $0 == "```" { infence = 0; close(f); next }
+    infence { print > f; next }
+    /^#### / { i++; name = substr($0, 6); print i " " name > (d "/names"); want = 1; next }
+    want && $0 == "```text" { infence = 1; want = 0; f = d "/b" i; printf "" > f; next }
+  ' "$r"
+  : >> "$tmp/names"
+  while read -r i name; do
+    n=$((n + 1))
+    case "$name" in
+      /* | *..*) rc_bad "block $name: not a name below the scratch root" ;;
+      *)
+        if [ ! -f "$tmp/b$i" ]; then
+          rc_bad "block $name: no fenced text block after its heading"
+        elif [ ! -f "$e/$name" ]; then
+          rc_bad "block $name: no scratch file $e/$name"
+        elif ! cmp -s "$tmp/b$i" "$e/$name"; then
+          rc_bad "block $name: differs from $e/$name"
+        fi
+        ;;
+    esac
+  done < "$tmp/names"
+  for p in $list; do
+    n=$((n + 1))
+    awk -v p="$p" '$2 == p { f = 1 } END { exit !f }' "$tmp/names" || rc_bad "block $p: the paste list has it, the appendix does not"
+  done
+  # Tokens outside the appendix.
+  awk '$0 == "## Appendix: raw output" { exit } { print }' "$r" \
+    | grep -o '`amd64-t34-[A-Za-z0-9._-]*/[A-Za-z0-9._/-]*`' | tr -d '`' | sort -u > "$tmp/tokens" || true
+  while read -r tok; do
+    n=$((n + 1))
+    awk -v p="$tok" '$2 == p { f = 1 } END { exit !f }' "$tmp/names" || rc_bad "cited file $tok has no block in the appendix"
+  done < "$tmp/tokens"
+  # The evidence commit.
+  n=$((n + 1))
+  if [ "$(grep -c '^Evidence commit: ' "$r" || true)" != 1 ]; then
+    rc_bad "the record must hold exactly one line 'Evidence commit: SHA'"
+  else
+    sha=$(sed -n 's/^Evidence commit: `\{0,1\}\([0-9a-f]\{7,40\}\)`\{0,1\} *$/\1/p' "$r")
+    pinned=$(cat "$e/amd64-t34-evidence-commit.txt" 2> /dev/null || true)
+    if [ -z "$sha" ] || ! git cat-file -e "$sha^{commit}" 2> /dev/null; then
+      rc_bad "Evidence commit '${sha:-?}' does not resolve to a commit"
+    elif [ -z "$pinned" ] || [ "$(git rev-parse "$sha^{commit}")" != "$(git rev-parse "$pinned^{commit}" 2> /dev/null || true)" ]; then
+      rc_bad "Evidence commit $sha is not the pinned commit '$pinned' of $e/amd64-t34-evidence-commit.txt"
+    else
+      for bf in $BOUND_FILES; do
+        n=$((n + 1))
+        git diff --quiet "$sha" HEAD -- "$bf" || rc_bad "bound file $bf differs between $sha and HEAD"
+      done
+      n=$((n + 1))
+      git diff --quiet "$sha" HEAD -- cmd internal go.mod go.sum || rc_bad "cmd, internal, go.mod or go.sum differ between $sha and HEAD (the binary is not the one of the evidence)"
+    fi
+  fi
+  # The summary of a rehearsal is never evidence.
+  n=$((n + 1))
+  i=$(awk '$2 == "amd64-t34-summary.txt" { print $1; exit }' "$tmp/names")
+  if [ -n "$i" ] && [ -f "$tmp/b$i" ] && grep -q '^REHEARSAL:' "$tmp/b$i"; then
+    rc_bad "the pasted summary is a rehearsal's (REHEARSAL line)"
+  fi
+  # No secret.
+  n=$((n + 1))
+  if grep -q 'PRIVATE KEY-----' "$r"; then
+    rc_bad "a line holds a private-key marker"
+  fi
+  rm -rf "${tmp:?}"
+  if [ "$k" -ne 0 ]; then
+    echo "RECORD-CHECK FAILED ($k of $n)"
+    return 1
+  fi
+  echo "RECORD-CHECK OK ($n checks)"
+}
+
+cmd_appendix() {
+  local st=${1:-} rc=0
+  paste_list "$st" > /dev/null || {
+    say "upgrade-verify.sh: appendix STAGE: the stage must be mig, upd or rb (got '$st')"
+    return 2
+  }
+  appendix_print "$st" "${E:-deploy/test/out}" || rc=$?
+  return "$rc"
+}
+cmd_record_check() {
+  local st rc=0
+  st=$(record_stage "${R:-}") || {
+    say "upgrade-verify.sh: record-check: R must name deploy/MIGRATION-RESTORE-RUN.md, deploy/UPDATE-CHAIN-RUN.md or deploy/ROLLBACK-RUN.md (got '${R:-}')"
+    return 2
+  }
+  t34_record_check "$R" "${E:-deploy/test/out}" "$st" || rc=$?
+  return "$rc"
+}
+
+# ---------------------------------------------------------------------------
 # selftest
 # ---------------------------------------------------------------------------
 
@@ -1031,6 +1255,166 @@ selftest_applied() {
   st_ans "applied_versions: a failure line is no applied migration" "70" applied_versions "$j"
 }
 
+st_has() { # NAME NEEDLE HAYSTACK: the text must contain the needle
+  ST_N=$((ST_N + 1))
+  case "$3" in
+    *"$2"*) ;;
+    *)
+      ST_BAD=$((ST_BAD + 1))
+      say "SELFTEST BAD $1: expected the text to contain '$2', got: $3"
+      ;;
+  esac
+}
+
+# rc_of cmd args...: the status of the command, its output dropped.
+rc_of() {
+  local rc=0
+  "$@" > /dev/null 2>&1 || rc=$?
+  echo "$rc"
+}
+
+# fx_scratch E STAGE: a scratch root holding every file of the paste list of
+# STAGE, small texts.
+fx_scratch() {
+  local e=$1 st=$2 p
+  rm -rf "${e:?}"
+  mkdir -p "$e/amd64-t34-mig-src" "$e/amd64-t34-upd" "$e/amd64-t34-rb"
+  for p in $(paste_list "$st"); do
+    printf 'line one of %s\nKEY: value\n' "$p" > "$e/$p"
+  done
+  printf 'MIG-01 PASS\nMIG-02 PASS\nUPD-01 PASS\nUPD-02 PASS\nSTAGES: mig upd rb\n' > "$e/amd64-t34-summary.txt"
+  printf '0\n' > "$e/amd64-t34-pass1.status"
+  git rev-parse --short HEAD > "$e/amd64-t34-evidence-commit.txt"
+}
+
+# fx_record E STAGE R [EVIDENCE-LINE]: a record whose appendix is `appendix` over E.
+fx_record() {
+  local e=$1 st=$2 r=$3 ev=${4:-}
+  [ -n "$ev" ] || ev="Evidence commit: $(cat "$e/amd64-t34-evidence-commit.txt")"
+  {
+    echo "# A run"
+    echo
+    echo "$ev"
+    echo
+    echo "The summary is \`amd64-t34-summary.txt\`; the versions are in \`$(paste_list "$st" | sed -n 2p)\`."
+    echo
+    echo "## Appendix: raw output"
+    echo
+    appendix_print "$st" "$e"
+  } > "$r"
+}
+
+selftest_record() {
+  local e=$ST_TMP/e r=$ST_TMP/RUN.md out marker st
+  fx_scratch "$e" mig
+  fx_record "$e" mig "$r"
+  out=$(t34_record_check "$r" "$e" mig 2>&1) || true
+  st_eq "record-check: a record equal to its files" 0 "$(rc_of t34_record_check "$r" "$e" mig)"
+  st_has "record-check: the OK line" "RECORD-CHECK OK (" "$out"
+
+  # One byte of one block differs from its file.
+  fx_record "$e" mig "$r"
+  awk '{ if ($0 == "line one of amd64-t34-mig-src/mig-journal.txt") print "line one of amd64-t34-mig-src/mig-journal.txT"; else print }' "$r" > "$r.x" && mv "$r.x" "$r"
+  out=$(t34_record_check "$r" "$e" mig 2>&1) || true
+  st_eq "record-check: a block differs by one byte" 1 "$(rc_of t34_record_check "$r" "$e" mig)"
+  st_has "record-check: the differing block is named" "amd64-t34-mig-src/mig-journal.txt" "$out"
+
+  # A DIRECTORY/FILE token outside the appendix without a block.
+  fx_record "$e" mig "$r"
+  awk '{ print } /^Evidence commit: / { print ""; print "See `amd64-t34-mig-src/notpasted.txt`." }' "$r" > "$r.x" && mv "$r.x" "$r"
+  out=$(t34_record_check "$r" "$e" mig 2>&1) || true
+  st_eq "record-check: a cited file without a block" 1 "$(rc_of t34_record_check "$r" "$e" mig)"
+  st_has "record-check: the cited file is named" "amd64-t34-mig-src/notpasted.txt" "$out"
+
+  # Two Evidence commit lines.
+  fx_record "$e" mig "$r"
+  awk '{ print } /^Evidence commit: / { print $0 }' "$r" > "$r.x" && mv "$r.x" "$r"
+  st_eq "record-check: two Evidence commit lines" 1 "$(rc_of t34_record_check "$r" "$e" mig)"
+
+  # No Evidence commit line.
+  fx_record "$e" mig "$r"
+  grep -v '^Evidence commit: ' "$r" > "$r.x" && mv "$r.x" "$r"
+  st_eq "record-check: no Evidence commit line" 1 "$(rc_of t34_record_check "$r" "$e" mig)"
+
+  # An Evidence commit that does not resolve.
+  printf '0000000\n' > "$e/amd64-t34-evidence-commit.txt"
+  fx_record "$e" mig "$r"
+  st_eq "record-check: an Evidence commit that does not resolve" 1 "$(rc_of t34_record_check "$r" "$e" mig)"
+  fx_scratch "$e" mig
+
+  # An Evidence commit that resolves but is not the pinned one.
+  fx_record "$e" mig "$r" "Evidence commit: $(git rev-parse --short 'HEAD~1')"
+  st_eq "record-check: an Evidence commit other than the pinned one" 1 "$(rc_of t34_record_check "$r" "$e" mig)"
+
+  # A private-key marker anywhere (built from two halves, so this file holds none).
+  marker="-----BEGIN OPENSSH PRIV""ATE KEY-----"
+  fx_record "$e" mig "$r"
+  printf '%s\n' "$marker" >> "$r"
+  st_eq "record-check: a private-key marker" 1 "$(rc_of t34_record_check "$r" "$e" mig)"
+
+  # A rehearsal's summary is never evidence.
+  printf 'MIG-01 PASS\nMIG-02 PASS\nREHEARSAL: yes\n' > "$e/amd64-t34-summary.txt"
+  fx_record "$e" mig "$r"
+  st_eq "record-check: a rehearsal's summary" 1 "$(rc_of t34_record_check "$r" "$e" mig)"
+  fx_scratch "$e" mig
+
+  # A block missing for a file of the paste list.
+  fx_record "$e" mig "$r"
+  awk '/^#### amd64-t34-mig-src\/mig-check.txt$/ { skip = 1 } skip && /^```$/ { skip = 0; next } !skip { print }' "$r" > "$r.x" && mv "$r.x" "$r"
+  st_eq "record-check: a file of the paste list without a block" 1 "$(rc_of t34_record_check "$r" "$e" mig)"
+
+  # The record of one stage checked against the paste list of another.
+  fx_record "$e" mig "$r"
+  st_eq "record-check: a mig record against the upd paste list" 1 "$(rc_of t34_record_check "$r" "$e" upd)"
+
+  # No record at all; no stage.
+  st_eq "record-check: no record" 1 "$(rc_of t34_record_check "$ST_TMP/absent.md" "$e" mig)"
+  st_eq "record-check: no stage" 1 "$(rc_of t34_record_check "$r" "$e" "")"
+
+  # The upd and rb records pass on their own paste lists.
+  for st in upd rb; do
+    fx_scratch "$e" "$st"
+    fx_record "$e" "$st" "$r"
+    st_eq "record-check: a $st record equal to its files" 0 "$(rc_of t34_record_check "$r" "$e" "$st")"
+  done
+
+  # R names the record; the paste list follows from its name; any other file refuses.
+  st_ans "record_stage: MIGRATION-RESTORE-RUN.md" mig record_stage deploy/MIGRATION-RESTORE-RUN.md
+  st_ans "record_stage: UPDATE-CHAIN-RUN.md" upd record_stage deploy/UPDATE-CHAIN-RUN.md
+  st_ans "record_stage: ROLLBACK-RUN.md in another checkout" rb record_stage /x/holzcloud-cms/deploy/ROLLBACK-RUN.md
+  for st in deploy/BACKUP-VERIFY-RUN.md deploy/MIGRATION-RESTORE-RUN.mdx MIGRATION-RESTORE-RUN.md docs/ROLLBACK-RUN.md ""; do
+    st_ans "record_stage: '$st'" ERROR record_stage "$st"
+  done
+  st_eq "record-check: R outside the three records" 2 "$(R=deploy/BACKUP-VERIFY-RUN.md rc_of cmd_record_check)"
+  st_eq "record-check: no R" 2 "$(R='' rc_of cmd_record_check)"
+}
+
+selftest_appendix() {
+  local e=$ST_TMP/e st
+  for st in mig upd rb; do
+    fx_scratch "$e" "$st"
+    st_eq "appendix $st: every file pasteable" 0 "$(rc_of appendix_print "$st" "$e")"
+  done
+  fx_scratch "$e" mig
+  st_has "appendix: the first block" '#### amd64-t34-summary.txt' "$(appendix_print mig "$e")"
+  st_eq "appendix: the mig list has ten files" 10 "$(paste_list mig | wc -l | tr -d ' ')"
+  st_eq "appendix: the upd list has fourteen files" 14 "$(paste_list upd | wc -l | tr -d ' ')"
+  st_eq "appendix: the rb list has twelve files" 12 "$(paste_list rb | wc -l | tr -d ' ')"
+  printf 'x\n```\n' >> "$e/amd64-t34-mig-src/mig.txt"
+  st_eq "appendix: a line beginning with three backticks" 1 "$(rc_of appendix_print mig "$e")"
+  fx_scratch "$e" mig
+  printf '#### x\n' >> "$e/amd64-t34-mig-src/mig-restore.out"
+  st_eq "appendix: a line beginning with '#### '" 1 "$(rc_of appendix_print mig "$e")"
+  fx_scratch "$e" mig
+  printf '## x\n' >> "$e/amd64-t34-mig-src/mig-journal.txt"
+  st_eq "appendix: a line beginning with '## '" 1 "$(rc_of appendix_print mig "$e")"
+  fx_scratch "$e" mig
+  rm -f "$e/amd64-t34-mig-src/mig-check.txt"
+  st_eq "appendix: a file of the list is missing" 1 "$(rc_of appendix_print mig "$e")"
+  st_eq "appendix: an unknown stage" 2 "$(rc_of cmd_appendix bak01)"
+  st_eq "appendix: no stage" 2 "$(rc_of cmd_appendix "")"
+}
+
 cmd_selftest() {
   ST_N=0
   ST_BAD=0
@@ -1042,6 +1426,8 @@ cmd_selftest() {
   selftest_verdict_mig01
   selftest_verdict_mig02
   selftest_applied
+  selftest_record
+  selftest_appendix
   if [ "$ST_BAD" -ne 0 ]; then
     echo "SELFTEST FAILED: $ST_BAD of $ST_N cases"
     exit 1
@@ -1057,6 +1443,18 @@ while [ "$#" -gt 0 ]; do
     selftest) cmd_selftest ;;
     run) cmd_run ;;
     down) cmd_down ;;
+    appendix)
+      st=${1:-}
+      [ "$#" -eq 0 ] || shift
+      rc=0
+      cmd_appendix "$st" || rc=$?
+      [ "$rc" -eq 0 ] || exit "$rc"
+      ;;
+    record-check)
+      rc=0
+      cmd_record_check || rc=$?
+      [ "$rc" -eq 0 ] || exit "$rc"
+      ;;
     *) usage ;;
   esac
 done
