@@ -16,8 +16,9 @@
 #   browser-verify.sh appendix      the appendix blocks of the fixed paste list, from the files below E
 #   browser-verify.sh record-check  the proof of deploy/BROWSER-RUN.md (R) against the scratch
 #                                   root (E): every block byte for byte, the script text
-#                                   included, every cited file pasted, one Evidence commit,
-#                                   pinned and unchanged since
+#                                   included, every cited mac-t34- file pasted or written
+#                                   as "`FILE` (not pasted)", one Evidence commit, pinned
+#                                   and unchanged since, nothing secret outside the script
 #
 # R and E default to deploy/BROWSER-RUN.md and deploy/test/out.
 #
@@ -605,6 +606,177 @@ cmd_run() {
 }
 
 # ---------------------------------------------------------------------------
+# The record (plan 34-06 runs these; they are here so that the driver bound by
+# the evidence is the one that checks it). They never rely on `set -e`, print
+# one line per problem and end on an answer line.
+# ---------------------------------------------------------------------------
+
+# t34_paste_list: DIRECTORY/FILE (or FILE, for the run files) of the appendix, in
+# order. A list, never a glob: the run log, the started and finished stamps and
+# everything in UAT_DIR (server log, stderr, screenshots) are not on it.
+t34_paste_list() {
+  printf '%s\n' \
+    mac-t34-uat/summary.txt \
+    mac-t34-uat/versions.txt \
+    mac-t34-uat/uat.txt \
+    mac-t34-uat/script.txt \
+    mac-t34-uat/server-excerpt.txt \
+    mac-t34-evidence-commit.txt \
+    mac-t34-pass1.status
+}
+
+# appendix_print E: the blocks of the paste list from the files below E, each
+# "#### NAME", a blank line and a fenced text block. Refuses (prints nothing) when
+# a file is missing or holds a line that would end a fence or open a heading.
+appendix_print() {
+  local e=${1:-deploy/test/out} p bad=0
+  for p in $(t34_paste_list); do
+    if [ ! -f "$e/$p" ]; then
+      say "browser-verify.sh: appendix: no scratch file $e/$p"
+      bad=$((bad + 1))
+    elif grep -Eq '^(```|#### |## )' "$e/$p"; then
+      say "browser-verify.sh: appendix: $e/$p has a line that begins with three backticks, with '#### ' or with '## '; it cannot be pasted unchanged"
+      bad=$((bad + 1))
+    fi
+  done
+  if [ "$bad" -ne 0 ]; then
+    return 1
+  fi
+  for p in $(t34_paste_list); do
+    printf '#### %s\n\n' "$p"
+    printf '%s\n' '```text'
+    awk 1 "$e/$p"
+    printf '%s\n\n' '```'
+  done
+}
+
+# t34_record_check R E: the record R against the scratch root E.
+#  - every "#### NAME" block under "## Appendix: raw output" equals E/NAME byte for
+#    byte (the script text in mac-t34-uat/script.txt included), and every file of
+#    the paste list has a block;
+#  - every `mac-t34-...` token in backticks outside the appendix is the directory
+#    mac-t34-uat, has a block, or stands on its line as "`TOKEN` (not pasted)";
+#  - exactly one line "Evidence commit: SHA"; SHA resolves, is the pinned commit of
+#    E/mac-t34-evidence-commit.txt, and no bound file nor cmd, internal, go.mod or
+#    go.sum differs between SHA and HEAD;
+#  - the tracked JavaScript is exactly the htmx file;
+#  - the pasted summary is not a rehearsal's; no line holds a private-key marker;
+#    leak_scan passes over the whole record outside the script block.
+t34_record_check() {
+  local r=${1:-} e=${2:-} n=0 k=0 tmp i name sha pinned p tok bf
+  rc_bad() {
+    k=$((k + 1))
+    printf 'RECORD-CHECK BAD %s\n' "$*"
+  }
+  if [ ! -f "$r" ]; then
+    printf 'RECORD-CHECK BAD no record %s\n' "$r"
+    echo "RECORD-CHECK FAILED (1 of 1)"
+    return 1
+  fi
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/t34-record.XXXXXX") || return 1
+  # Split the appendix into numbered block files and a list "INDEX NAME".
+  awk -v d="$tmp" '
+    $0 == "## Appendix: raw output" { app = 1; next }
+    app && !infence && /^## / { app = 0 }
+    !app { next }
+    infence && $0 == "```" { infence = 0; close(f); next }
+    infence { print > f; next }
+    /^#### / { i++; name = substr($0, 6); print i " " name > (d "/names"); want = 1; next }
+    want && $0 == "```text" { infence = 1; want = 0; f = d "/b" i; printf "" > f; next }
+  ' "$r"
+  : >> "$tmp/names"
+  while read -r i name; do
+    n=$((n + 1))
+    case "$name" in
+      /* | *..*) rc_bad "block $name: not a name below the scratch root" ;;
+      *)
+        if [ ! -f "$tmp/b$i" ]; then
+          rc_bad "block $name: no fenced text block after its heading"
+        elif [ ! -f "$e/$name" ]; then
+          rc_bad "block $name: no scratch file $e/$name"
+        elif ! cmp -s "$tmp/b$i" "$e/$name"; then
+          rc_bad "block $name: differs from $e/$name"
+        fi
+        ;;
+    esac
+  done < "$tmp/names"
+  for p in $(t34_paste_list); do
+    n=$((n + 1))
+    awk -v p="$p" '$2 == p { f = 1 } END { exit !f }' "$tmp/names" || rc_bad "block $p: the paste list has it, the appendix does not"
+  done
+  # Tokens outside the appendix.
+  awk '$0 == "## Appendix: raw output" { exit } { print }' "$r" > "$tmp/prose"
+  grep -o '`mac-t34-[A-Za-z0-9._/-]*`' "$tmp/prose" | tr -d '`' | sort -u > "$tmp/tokens" || true
+  while read -r tok; do
+    n=$((n + 1))
+    [ "$tok" = mac-t34-uat ] && continue
+    awk -v p="$tok" '$2 == p { f = 1 } END { exit !f }' "$tmp/names" && continue
+    grep -qF "\`$tok\` (not pasted)" "$tmp/prose" && continue
+    rc_bad "cited file $tok has no block in the appendix and is not named as not pasted"
+  done < "$tmp/tokens"
+  # The evidence commit.
+  n=$((n + 1))
+  if [ "$(grep -c '^Evidence commit: ' "$r" || true)" != 1 ]; then
+    rc_bad "the record must hold exactly one line 'Evidence commit: SHA'"
+  else
+    sha=$(sed -n 's/^Evidence commit: `\{0,1\}\([0-9a-f]\{7,40\}\)`\{0,1\} *$/\1/p' "$r")
+    pinned=$(cat "$e/mac-t34-evidence-commit.txt" 2> /dev/null || true)
+    if [ -z "$sha" ] || ! git cat-file -e "$sha^{commit}" 2> /dev/null; then
+      rc_bad "Evidence commit '${sha:-?}' does not resolve to a commit"
+    elif [ -z "$pinned" ] || [ "$(git rev-parse "$sha^{commit}")" != "$(git rev-parse "$pinned^{commit}" 2> /dev/null || true)" ]; then
+      rc_bad "Evidence commit $sha is not the pinned commit '$pinned' of $e/mac-t34-evidence-commit.txt"
+    else
+      for bf in $BOUND_FILES; do
+        n=$((n + 1))
+        git diff --quiet "$sha" HEAD -- "$bf" || rc_bad "bound file $bf differs between $sha and HEAD"
+      done
+      n=$((n + 1))
+      git diff --quiet "$sha" HEAD -- $BINARY_SOURCE || rc_bad "cmd, internal, go.mod or go.sum differ between $sha and HEAD (the binary is not the one of the evidence)"
+    fi
+  fi
+  # No JavaScript beyond htmx entered the tree.
+  n=$((n + 1))
+  js_tracked_ok || rc_bad "the tracked JavaScript is not exactly $HTMX_JS"
+  # The summary of a rehearsal is never evidence.
+  n=$((n + 1))
+  i=$(awk '$2 == "mac-t34-uat/summary.txt" { print $1; exit }' "$tmp/names")
+  if [ -n "$i" ] && [ -f "$tmp/b$i" ] && grep -q '^REHEARSAL:' "$tmp/b$i"; then
+    rc_bad "the pasted summary is a rehearsal's (REHEARSAL line)"
+  fi
+  # No secret.
+  n=$((n + 1))
+  if grep -q 'PRIVATE KEY-----' "$r"; then
+    rc_bad "a line holds a private-key marker"
+  fi
+  n=$((n + 1))
+  awk '
+    $0 == "#### mac-t34-uat/script.txt" { skip = 1; next }
+    skip == 1 && $0 == "```text" { skip = 2; next }
+    skip == 2 && $0 == "```" { skip = 0; next }
+    skip == 2 { next }
+    { print }
+  ' "$r" > "$tmp/scan"
+  leak_scan "$tmp/scan" 2> "$tmp/leaks" || rc_bad "leak_scan: $(wc -l < "$tmp/leaks" | tr -d ' ') line(s) outside the script block hold a secret's shape ($(sed 's/^leak_scan: [^ ]* //' "$tmp/leaks" | tr '\n' ';' | sed 's/;$//'))"
+  rm -rf "${tmp:?}"
+  if [ "$k" -ne 0 ]; then
+    echo "RECORD-CHECK FAILED ($k of $n)"
+    return 1
+  fi
+  echo "RECORD-CHECK OK ($n checks)"
+}
+
+cmd_appendix() {
+  local rc=0
+  appendix_print "${E:-deploy/test/out}" || rc=$?
+  return "$rc"
+}
+cmd_record_check() {
+  local rc=0
+  t34_record_check "${R:-deploy/BROWSER-RUN.md}" "${E:-deploy/test/out}" || rc=$?
+  return "$rc"
+}
+
+# ---------------------------------------------------------------------------
 # selftest
 # ---------------------------------------------------------------------------
 
@@ -827,6 +999,169 @@ selftest_verdict_uat03() {
   done
 }
 
+st_has() { # NAME NEEDLE HAYSTACK: the text must contain the needle
+  ST_N=$((ST_N + 1))
+  case "$3" in
+    *"$2"*) ;;
+    *)
+      ST_BAD=$((ST_BAD + 1))
+      say "SELFTEST BAD $1: expected the text to contain '$2', got: $3"
+      ;;
+  esac
+}
+
+# rc_of cmd args...: the status of the command, its output dropped.
+rc_of() {
+  local rc=0
+  "$@" > /dev/null 2>&1 || rc=$?
+  echo "$rc"
+}
+
+# fx_scratch E: a scratch root holding every file of the paste list, small texts.
+fx_scratch() {
+  local e=$1 p
+  rm -rf "${e:?}"
+  mkdir -p "$e/mac-t34-uat"
+  for p in $(t34_paste_list); do
+    printf 'line one of %s\nKEY: value\n' "$p" > "$e/$p"
+  done
+  printf 'UAT-01 PASS\nUAT-02 PASS\nUAT-03 PASS\n' > "$e/mac-t34-uat/summary.txt"
+  printf '%s\n' "'use strict';" "const { chromium } = require(process.env.PW);" \
+    "console.log('ORDER-1-URL-SHAPE: ' + (/^\/bestellung\/[0-9a-f]{32}\$/.test(u) ? 'matches' : 'no'));" \
+    "const t = \`two \${x} words\`;" > "$e/mac-t34-uat/script.txt"
+  printf '0\n' > "$e/mac-t34-pass1.status"
+  git rev-parse --short HEAD > "$e/mac-t34-evidence-commit.txt"
+}
+
+# fx_record E R [EVIDENCE-LINE]: a record whose appendix is `appendix` over E.
+fx_record() {
+  local e=$1 r=$2 ev=${3:-}
+  [ -n "$ev" ] || ev="Evidence commit: $(cat "$e/mac-t34-evidence-commit.txt")"
+  {
+    echo "# Browser run"
+    echo
+    echo "$ev"
+    echo
+    echo 'The verdicts are `mac-t34-uat/summary.txt`; the directory `mac-t34-uat` holds the rest,'
+    echo 'the run log `mac-t34-pass1.log` (not pasted) the trace.'
+    echo
+    echo "## Appendix: raw output"
+    echo
+    appendix_print "$e"
+  } > "$r"
+}
+
+# fx_edit R AWK-PROGRAM: rewrite the record R through awk.
+fx_edit() {
+  awk "$2" "$1" > "$1.x" && mv "$1.x" "$1"
+}
+
+selftest_record() {
+  local e=$ST_TMP/e r=$ST_TMP/RUN.md out marker
+  fx_scratch "$e"
+  fx_record "$e" "$r"
+  out=$(t34_record_check "$r" "$e" 2>&1) || true
+  st_eq "record-check: a record equal to its files" 0 "$(rc_of t34_record_check "$r" "$e")"
+  st_has "record-check: the OK line" "RECORD-CHECK OK (" "$out"
+
+  # One byte of one block differs from its file.
+  fx_record "$e" "$r"
+  fx_edit "$r" '{ if ($0 == "line one of mac-t34-uat/uat.txt") print "line one of mac-t34-uat/uat.txT"; else print }'
+  out=$(t34_record_check "$r" "$e" 2>&1) || true
+  st_eq "record-check: a block differs by one byte" 1 "$(rc_of t34_record_check "$r" "$e")"
+  st_has "record-check: the differing block is named" "mac-t34-uat/uat.txt" "$out"
+
+  # One byte of the script block differs from script.txt.
+  fx_record "$e" "$r"
+  fx_edit "$r" '{ if ($0 == "'"'"'use strict'"'"';") print "'"'"'use strict'"'"'"; else print }'
+  out=$(t34_record_check "$r" "$e" 2>&1) || true
+  st_eq "record-check: the script block differs by one byte" 1 "$(rc_of t34_record_check "$r" "$e")"
+  st_has "record-check: the script block is named" "mac-t34-uat/script.txt" "$out"
+
+  # A DIRECTORY/FILE token outside the appendix without a block.
+  fx_record "$e" "$r"
+  fx_edit "$r" '{ print } /^Evidence commit: / { print ""; print "See `mac-t34-uat/notpasted.txt`." }'
+  out=$(t34_record_check "$r" "$e" 2>&1) || true
+  st_eq "record-check: a cited file without a block" 1 "$(rc_of t34_record_check "$r" "$e")"
+  st_has "record-check: the cited file is named" "mac-t34-uat/notpasted.txt" "$out"
+
+  # A run file cited without a block and without saying it is not pasted.
+  fx_record "$e" "$r"
+  fx_edit "$r" '{ print } /^Evidence commit: / { print ""; print "The run began at `mac-t34-pass1.started`." }'
+  st_eq "record-check: a run file cited, neither pasted nor named as not pasted" 1 "$(rc_of t34_record_check "$r" "$e")"
+
+  # Two Evidence commit lines.
+  fx_record "$e" "$r"
+  fx_edit "$r" '{ print } /^Evidence commit: / { print $0 }'
+  st_eq "record-check: two Evidence commit lines" 1 "$(rc_of t34_record_check "$r" "$e")"
+
+  # An Evidence commit that does not resolve.
+  printf '0000000\n' > "$e/mac-t34-evidence-commit.txt"
+  fx_record "$e" "$r"
+  st_eq "record-check: an Evidence commit that does not resolve" 1 "$(rc_of t34_record_check "$r" "$e")"
+  fx_scratch "$e"
+
+  # An Evidence commit that resolves but is not the pinned one.
+  fx_record "$e" "$r" "Evidence commit: $(git rev-parse --short 'HEAD~1')"
+  st_eq "record-check: an Evidence commit other than the pinned one" 1 "$(rc_of t34_record_check "$r" "$e")"
+
+  # A private-key marker anywhere (built from two halves, so this file holds none).
+  marker="-----BEGIN OPENSSH PRIV""ATE KEY-----"
+  fx_record "$e" "$r"
+  printf '%s\n' "$marker" >> "$r"
+  st_eq "record-check: a private-key marker" 1 "$(rc_of t34_record_check "$r" "$e")"
+
+  # A line leak_scan rejects, in the prose and in a pasted block.
+  fx_record "$e" "$r"
+  fx_edit "$r" '{ print } /^Evidence commit: / { print ""; print "Token: 0123456789abcdef0123456789abcdef" }'
+  out=$(t34_record_check "$r" "$e" 2>&1) || true
+  st_eq "record-check: a 32-hex run in the prose" 1 "$(rc_of t34_record_check "$r" "$e")"
+  st_has "record-check: the leak is named" "leak_scan" "$out"
+  printf 'SECRET: JBSWY3DPEHPK3PXPJBSWY3DP\n' >> "$e/mac-t34-uat/uat.txt"
+  fx_record "$e" "$r"
+  st_eq "record-check: a base32 secret in the uat.txt block" 1 "$(rc_of t34_record_check "$r" "$e")"
+  fx_scratch "$e"
+
+  # The script block is outside leak_scan: its text is the script, byte for byte.
+  printf '%s\n' "const sample = '0123456789abcdef0123456789abcdef';" >> "$e/mac-t34-uat/script.txt"
+  fx_record "$e" "$r"
+  st_eq "record-check: a 32-hex run inside the script block only" 0 "$(rc_of t34_record_check "$r" "$e")"
+  fx_scratch "$e"
+
+  # A rehearsal's summary is never evidence.
+  printf 'UAT-01 PASS\nUAT-02 PASS\nUAT-03 PASS\nREHEARSAL: yes\n' > "$e/mac-t34-uat/summary.txt"
+  fx_record "$e" "$r"
+  st_eq "record-check: a rehearsal's summary" 1 "$(rc_of t34_record_check "$r" "$e")"
+  fx_scratch "$e"
+
+  # A block missing for a file of the paste list.
+  fx_record "$e" "$r"
+  fx_edit "$r" '/^#### mac-t34-uat\/server-excerpt.txt$/ { skip = 1 } skip && /^```$/ { skip = 0; next } !skip { print }'
+  st_eq "record-check: a file of the paste list without a block" 1 "$(rc_of t34_record_check "$r" "$e")"
+
+  # No record at all.
+  st_eq "record-check: no record" 1 "$(rc_of t34_record_check "$ST_TMP/absent.md" "$e")"
+}
+
+selftest_appendix() {
+  local e=$ST_TMP/e
+  fx_scratch "$e"
+  st_eq "appendix: every file pasteable" 0 "$(rc_of appendix_print "$e")"
+  st_has "appendix: the first block" '#### mac-t34-uat/summary.txt' "$(appendix_print "$e")"
+  st_has "appendix: the script block" '#### mac-t34-uat/script.txt' "$(appendix_print "$e")"
+  printf 'x\n```\n' >> "$e/mac-t34-uat/uat.txt"
+  st_eq "appendix: a line beginning with three backticks" 1 "$(rc_of appendix_print "$e")"
+  fx_scratch "$e"
+  printf '#### x\n' >> "$e/mac-t34-uat/script.txt"
+  st_eq "appendix: a line beginning with '#### '" 1 "$(rc_of appendix_print "$e")"
+  fx_scratch "$e"
+  printf '## x\n' >> "$e/mac-t34-uat/server-excerpt.txt"
+  st_eq "appendix: a line beginning with '## '" 1 "$(rc_of appendix_print "$e")"
+  fx_scratch "$e"
+  rm -f "$e/mac-t34-uat/versions.txt"
+  st_eq "appendix: a file of the list is missing" 1 "$(rc_of appendix_print "$e")"
+}
+
 cmd_selftest() {
   local t=${TMPDIR:-/tmp}
   ST_N=0
@@ -840,6 +1175,8 @@ cmd_selftest() {
   selftest_verdict_uat01
   selftest_verdict_uat02
   selftest_verdict_uat03
+  selftest_record
+  selftest_appendix
   if [ "$ST_BAD" -ne 0 ]; then
     echo "SELFTEST FAILED: $ST_BAD of $ST_N cases"
     exit 1
@@ -854,6 +1191,8 @@ while [ "$#" -gt 0 ]; do
   case "$sub" in
     selftest) cmd_selftest ;;
     run) cmd_run ;;
+    appendix) cmd_appendix ;;
+    record-check) cmd_record_check ;;
     *) usage ;;
   esac
 done
