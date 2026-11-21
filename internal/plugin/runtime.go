@@ -26,6 +26,11 @@ import (
 // rather than a dead one.
 const CallTimeout = 2 * time.Second
 
+// LoadTimeout bounds compiling a module and running its _initialize. It is
+// far above what a shipped plugin needs (well under a second) and exists so
+// that a module whose start never returns cannot hold a load for ever.
+const LoadTimeout = 60 * time.Second
+
 // MemoryPages bounds one instance's linear memory, in 64 KiB pages.
 //
 // 256 pages is 16 MB. A Go guest needs a few megabytes for its runtime before
@@ -180,6 +185,15 @@ func (r *Runtime) Close(ctx context.Context) error {
 // Compiling takes the better part of a second, so it happens here — at startup
 // or when a plugin is switched on — and never in a request.
 func (r *Runtime) Load(ctx context.Context, m *Manifest, module []byte) error {
+	// A load is not the caller's to cancel. Switching a plugin on runs inside
+	// the admin's request, and a browser that drops it (a navigation, a closed
+	// tab) cancels that context while the module compiles or runs _initialize;
+	// with WithCloseOnContextDone the engine then closes the module mid-start,
+	// and the plugin stays switched on but not running. The load keeps the
+	// caller's values, drops its cancellation and gets a bound of its own.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), LoadTimeout)
+	defer cancel()
+
 	compiled, err := r.engine.CompileModule(ctx, module)
 	if err != nil {
 		return fmt.Errorf("the module cannot be compiled: %w", err)

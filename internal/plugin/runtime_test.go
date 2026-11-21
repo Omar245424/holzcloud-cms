@@ -258,3 +258,41 @@ func TestEntladenUndNichtGeladen(t *testing.T) {
 		t.Error("ein entladenes Plugin wurde aufgerufen")
 	}
 }
+
+// Switching a plugin on loads it inside the admin's request. When the browser
+// drops that request — a navigation, a closed tab — its context is cancelled
+// while the module compiles or runs _initialize, and the runtime, which closes
+// a module whose context is done, used to close the plugin mid-start: switched
+// on, not running (found by the phase 34 browser record). A load must not
+// depend on the caller staying connected.
+func TestALoadOutlivesTheRequestThatStartedIt(t *testing.T) {
+	s, _ := neuerSpeicher(t)
+	r, err := NewRuntime(context.Background(), s, nil)
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+	t.Cleanup(func() { r.Close(context.Background()) })
+
+	m := goodManifest()
+	m.ID = "echo"
+	m.Name = "Echo"
+	m.Hooks = []string{HookContent}
+	p := &Package{Manifest: &m, Module: echoModule(t), SHA256: strings.Repeat("a", 64)}
+	if err := s.Install(context.Background(), p); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := r.Load(gone, &m, p.Module); err != nil {
+		t.Fatalf("Load with the request already gone: %v", err)
+	}
+	var out ContentOut
+	if err := r.Dispatch(context.Background(), "echo", HookContent, 1,
+		ContentIn{WebsiteID: 1, Slug: "home", HTML: "<p>Hallo</p>"}, &out); err != nil {
+		t.Fatalf("the plugin does not answer after a load whose request was gone: %v", err)
+	}
+	if !out.Changed {
+		t.Errorf("the plugin did not run: %+v", out)
+	}
+}
