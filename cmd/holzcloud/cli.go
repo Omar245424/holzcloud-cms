@@ -144,6 +144,11 @@ func openForCLISnapshot(snapshotFirst bool) (config.Config, *db.DB, error) {
 		}
 		return cfg, nil, fmt.Errorf("migrations: %w", err)
 	}
+	// The marker of an unfinished migration belongs to the data directory's
+	// own database; check -copy migrates a throwaway copy and leaves it alone.
+	if snapshotFirst {
+		forgetPreUpgradeSnapshot(cfg)
+	}
 	return cfg, database, nil
 }
 
