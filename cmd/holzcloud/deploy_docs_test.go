@@ -344,3 +344,13 @@ func TestDeployInstallsNothingFromAFixedTmpPath(t *testing.T) {
 		}
 	}
 }
+
+// After a failed update the restarts log "pre-upgrade snapshot kept", not
+// "written". The journal check line of Updating step 3 and the last line of
+// Rolling back block 1 must find it, or the check prints "no migration, no
+// snapshot" while a snapshot exists (found by the phase 34 rollback record).
+func TestTheJournalCheckLineFindsAKeptSnapshot(t *testing.T) {
+	const pattern = "grep -E 'pre-upgrade snapshot (written|kept)|migration applied'"
+	sectionContains(t, "## Updating", pattern, "each restart logs `pre-upgrade snapshot kept`")
+	sectionContains(t, "## Rolling back", pattern)
+}

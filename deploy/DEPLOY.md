@@ -805,7 +805,7 @@ and commit that now run; the second reads the journal since that start:
 
 ```bash
 curl -fsS --retry 30 --retry-connrefused --retry-delay 1 http://127.0.0.1:8080/readyz | jq '{status, version, commit, integrity}'
-sudo journalctl -u holzcloud --since "$(systemctl show -p ActiveEnterTimestamp --value holzcloud)" -o cat | grep -E 'pre-upgrade snapshot written|migration applied' || echo 'no migration, no snapshot'
+sudo journalctl -u holzcloud --since "$(systemctl show -p ActiveEnterTimestamp --value holzcloud)" -o cat | grep -E 'pre-upgrade snapshot (written|kept)|migration applied' || echo 'no migration, no snapshot'
 ```
 
 `version` and `commit` must be the new build's, and `status` and `integrity` must
@@ -816,7 +816,10 @@ pending schema changes. When there are any, the journal shows one line
 `pre-upgrade snapshot written`, with the `path` of the file and the migration
 `level` it holds, and then one line `migration applied` per migration. An update across two migrations showed exactly
 that: the snapshot line, then `migration applied` for version 59 and for 60, and
-the schema went from 58 to 60. No such lines means that no migration was
+the schema went from 58 to 60. When an update fails, systemd restarts the
+service and each restart logs `pre-upgrade snapshot kept` with the `path` of the
+snapshot written before the first attempt, so after a failed update the line
+shows that, and the way back is *Rolling back* below. No such lines means that no migration was
 pending, and in that case there is no snapshot either: the line then prints
 `no migration, no snapshot` (without that, `grep` finds nothing and the line ends
 with a failure status, which is not a failure of the update).
@@ -935,7 +938,7 @@ sudo -u holzcloud cp "$(ls -t /opt/holzcloud/data/pre-upgrade-*.sqlite | head -n
 sudo systemctl reset-failed holzcloud
 sudo systemctl start holzcloud
 curl -fsS --retry 30 --retry-connrefused --retry-delay 1 http://127.0.0.1:8080/readyz | jq '{status, version, commit, integrity}'
-sudo journalctl -u holzcloud --since "$(systemctl show -p ActiveEnterTimestamp --value holzcloud)" -o cat | grep -E 'pre-upgrade snapshot written|migration applied' || echo 'no migration, no snapshot'
+sudo journalctl -u holzcloud --since "$(systemctl show -p ActiveEnterTimestamp --value holzcloud)" -o cat | grep -E 'pre-upgrade snapshot (written|kept)|migration applied' || echo 'no migration, no snapshot'
 ```
 
 `version` must be the old build's, `status` and `integrity` must read `ok`, and the

@@ -493,6 +493,7 @@ verdict_upd02() {
     rz=$(kv "$f" ROLLBACK-READYZ)
     if [ "$fl" -eq "$((b0 + 2))" ] && [ "$st" -ge 2 ] \
       && kv_num "$f" UPDATE-CHECK-RC && [ "$(kv "$f" UPDATE-CHECK-RC)" -ne 0 ] \
+      && kv_is "$f" UPDATE-CHECK-SNAPSHOT-LINE yes \
       && kv_is "$f" JOURNAL-SNAPSHOT-WRITTEN 1 && kv_level "$f" JOURNAL-SNAPSHOT-KEPT "$((st - 1))" \
       && kv_level "$f" JOURNAL-MIGRATIONS-FAILED "$st" && kv_level "$f" JOURNAL-RESTORE-WITH "$st" \
       && kv_is "$f" RESTORE-WITH-DISTINCT-PATHS 1 && kv_is "$f" RESTORE-WITH-NAMES-WRITTEN yes \
@@ -1453,6 +1454,17 @@ rb_update() {
     play_block "$RB_NAME" "$d/rb-update.out" rb-update Updating "$b" "$F_BIN"
   done
   put "$f" UPDATE-CHECK-RC "$(nth_word 1 $PLAY_RCS)"
+  # The journal line of the check block, as DEPLOY.md *Updating* step 3 has it:
+  # after a failed update it must name the snapshot (written by the first start,
+  # kept by the restarts), never print "no migration, no snapshot".
+  local ck
+  ck=$(play_text "$(nth_word 2 $PLAY_FILES)")
+  if printf '%s\n' "$ck" | grep -qE 'pre-upgrade snapshot (written|kept)' \
+    && ! printf '%s\n' "$ck" | grep -qF 'no migration, no snapshot'; then
+    put "$f" UPDATE-CHECK-SNAPSHOT-LINE yes
+  else
+    put "$f" UPDATE-CHECK-SNAPSHOT-LINE no
+  fi
 }
 
 # rb_loop: the restart loop to its end, the journal of the update window, the
@@ -2696,6 +2708,7 @@ fx_rb() {
     echo "F-BUILD: v0.1.4-246-g1234567 (1234567) migrations 71 sha256 abc"
     echo "START-WINDOW-WAIT-S: 120"
     echo "UPDATE-CHECK-RC: 7"
+    echo "UPDATE-CHECK-SNAPSHOT-LINE: yes"
     echo "STARTS: 5"
     echo "NRESTARTS: 4"
     echo "RESULT: start-limit-hit"
@@ -2738,7 +2751,7 @@ selftest_verdict_upd02() {
   fx_rb "$f"
   st_ans "verdict_upd02: every key good" PASS verdict_upd02 "$f"
   for kv in "B0-VERSION|" "B0-VERSION|-" "LEVEL-EXPECTED-B0|-" "LEVEL-EXPECTED-B0|x" "LEVEL-EXPECTED-F|72" "LEVEL-EXPECTED-F|-" \
-    "UPDATE-CHECK-RC|0" "UPDATE-CHECK-RC|-" "STARTS|1" "STARTS|4" "STARTS|-" \
+    "UPDATE-CHECK-RC|0" "UPDATE-CHECK-RC|-" "UPDATE-CHECK-SNAPSHOT-LINE|no" "UPDATE-CHECK-SNAPSHOT-LINE|-" "STARTS|1" "STARTS|4" "STARTS|-" \
     "JOURNAL-SNAPSHOT-WRITTEN|0" "JOURNAL-SNAPSHOT-WRITTEN|2" "JOURNAL-SNAPSHOT-WRITTEN|-" \
     "JOURNAL-SNAPSHOT-KEPT|5" "JOURNAL-SNAPSHOT-KEPT|3" "JOURNAL-SNAPSHOT-KEPT|-" \
     "JOURNAL-MIGRATIONS-FAILED|4" "JOURNAL-MIGRATIONS-FAILED|-" "JOURNAL-RESTORE-WITH|4" "JOURNAL-RESTORE-WITH|-" \
