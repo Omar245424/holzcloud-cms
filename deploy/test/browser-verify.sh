@@ -272,6 +272,74 @@ verdict_uat01() {
   fi
 }
 
+# kv_names FILE KEY WORD...: the key occurs exactly once and its value, a list
+# separated by commas, names every WORD as an item of its own.
+kv_names() {
+  local f=$1 k=$2 v w
+  shift 2
+  [ "$(kv_count "$f" "$k")" = 1 ] || return 1
+  v=", $(kv "$f" "$k" | sed 's/ *, */, /g'),"
+  for w in "$@"; do
+    case "$v" in
+      *", $w,"*) ;;
+      *) return 1 ;;
+    esac
+  done
+  return 0
+}
+
+# verdict_uat02 FILE: PASS, FAIL or NOT-RUN (no file) for the UAT-02 keys of uat.txt.
+verdict_uat02() {
+  local f=${1:-} n
+  if [ ! -f "$f" ]; then
+    echo NOT-RUN
+    return 0
+  fi
+  if ! kv_is "$f" PRODUCT-PAGE 200 ||
+    ! kv_is "$f" COOKIE-BEFORE-ACTION none ||
+    ! kv_is "$f" BASKET-COOKIE hc_warenkorb ||
+    ! kv_names "$f" PAYMENT-OFFERED invoice prepay ||
+    ! kv_is "$f" PAYREXX-OFFERED no ||
+    ! kv_is "$f" ORDER-1-ADMIN-PAYMENT Rechnung ||
+    ! kv_is "$f" ORDER-2-ADMIN-PAYMENT Vorauskasse; then
+    echo FAIL
+    return 0
+  fi
+  for n in 1 2; do
+    if ! kv_starts "$f" "ORDER-$n-URL-SHAPE" "matches " || ! kv_is "$f" "ORDER-$n-ADMIN-LISTED" yes; then
+      echo FAIL
+      return 0
+    fi
+  done
+  echo PASS
+}
+
+# verdict_uat03 FILE: PASS, FAIL or NOT-RUN (no file) for the UAT-03 keys of uat.txt.
+verdict_uat03() {
+  local f=${1:-} ms
+  if [ ! -f "$f" ]; then
+    echo NOT-RUN
+    return 0
+  fi
+  ms=$(kv "$f" FORM-WAIT-MS)
+  case "$ms" in
+    "" | *[!0-9]*) ms=0 ;;
+  esac
+  if kv_is "$f" FORM-PAGE 200 &&
+    [ "$(kv_count "$f" FORM-WAIT-MS)" = 1 ] && [ "$ms" -ge 4000 ] &&
+    kv_is "$f" MESSAGE-IN-ADMIN yes &&
+    kv_is "$f" SPAM-FIELD website &&
+    kv_is "$f" SPAM-ANSWER-SAME yes &&
+    kv_is "$f" SPAM-IN-QUARANTINE yes &&
+    [ "$(kv_count "$f" QUARANTINE-REASON)" = 1 ] && [ -n "$(kv "$f" QUARANTINE-REASON)" ] &&
+    kv_is "$f" SPAM-NOT-IN-MESSAGES yes &&
+    kv_starts "$f" SAME-ORIGIN "yes"; then
+    echo PASS
+  else
+    echo FAIL
+  fi
+}
+
 # js_tracked_ok: the tracked JavaScript of the tree is exactly the htmx file.
 js_tracked_ok() {
   [ "$(git ls-files '*.js' '*.mjs' '*.cjs')" = "$HTMX_JS" ]
@@ -434,8 +502,8 @@ write_summary() {
   {
     echo "---- summary (mac, dev server, Chromium) ----"
     echo "UAT-01 $(verdict_uat01 "$T34_OUT/uat.txt")"
-    echo "UAT-02 NOT-RUN"
-    echo "UAT-03 NOT-RUN"
+    echo "UAT-02 $(verdict_uat02 "$T34_OUT/uat.txt")"
+    echo "UAT-03 $(verdict_uat03 "$T34_OUT/uat.txt")"
     echo "BINARY: $("$UAT_DIR/holzcloud" version 2> /dev/null | head -n 1)"
     if [ -n "$REHEARSAL" ]; then
       echo "REHEARSAL: yes (bound files were allowed to differ from HEAD; this set is not evidence)"
@@ -689,6 +757,76 @@ selftest_verdict_uat01() {
   st_eq "verdict_uat01: a key twice" FAIL "$(verdict_uat01 "$f")"
 }
 
+# fx_keys FILE LINES [KEY VALUE]: LINES (one "KEY: value" per line) into FILE, one
+# value replaced (the value "-" removes the key).
+fx_keys() {
+  local f=$1 k=${3:-} v=${4:-}
+  printf '%s\n' "$2" > "$f"
+  if [ -n "$k" ]; then
+    awk -v k="$k" -v v="$v" 'index($0, k ": ") == 1 { if (v != "-") print k ": " v; next } { print }' "$f" > "$f.x" && mv "$f.x" "$f"
+  fi
+}
+
+FX_UAT02='FIXTURE-SQL: none
+PRODUCT-PAGE: 200
+COOKIE-BEFORE-ACTION: none
+BASKET-COOKIE: hc_warenkorb
+PAYMENT-OFFERED: invoice, prepay
+PAYREXX-OFFERED: no
+ORDER-1-URL-SHAPE: matches /bestellung/[0-9a-f]{32}
+ORDER-1-NUMBER: 2026-0001
+ORDER-1-ADMIN-LISTED: yes
+ORDER-1-ADMIN-PAYMENT: Rechnung
+ORDER-1-ADMIN-STATUS: Neu
+ORDER-2-URL-SHAPE: matches /bestellung/[0-9a-f]{32}
+ORDER-2-NUMBER: 2026-0002
+ORDER-2-ADMIN-LISTED: yes
+ORDER-2-ADMIN-PAYMENT: Vorauskasse
+ORDER-2-ADMIN-STATUS: Neu'
+
+FX_UAT03='FORM-PAGE: 200
+FORM-WAIT-MS: 4512
+MESSAGE-ANSWER: formular=gesendet, Danke
+MESSAGE-IN-ADMIN: yes
+SPAM-FIELD: website
+SPAM-ANSWER-SAME: yes
+SPAM-IN-QUARANTINE: yes
+QUARANTINE-REASON: Das versteckte Feld wurde ausgefüllt
+SPAM-NOT-IN-MESSAGES: yes
+SAME-ORIGIN: yes (57 requests, 1 origin)
+JS: on'
+
+selftest_verdict_uat02() {
+  local f=$ST_TMP/uat02.txt kv
+  fx_keys "$f" "$FX_UAT02"
+  st_eq "verdict_uat02: every key right" PASS "$(verdict_uat02 "$f")"
+  st_eq "verdict_uat02: no file" NOT-RUN "$(verdict_uat02 "$ST_TMP/absent.txt")"
+  st_eq "verdict_uat02: the keys of UAT-01 only" FAIL "$(fx_uat01 "$f" && verdict_uat02 "$f")"
+  for kv in 'PRODUCT-PAGE|404' 'COOKIE-BEFORE-ACTION|hc_warenkorb' 'BASKET-COOKIE|none' 'BASKET-COOKIE|hc_warenkorb2' \
+    'PAYMENT-OFFERED|invoice' 'PAYMENT-OFFERED|prepay' 'PAYMENT-OFFERED|invoices, prepayment' 'PAYREXX-OFFERED|yes' \
+    'ORDER-1-URL-SHAPE|does not match (/kasse)' 'ORDER-2-URL-SHAPE|does not match (/kasse)' \
+    'ORDER-1-ADMIN-LISTED|no' 'ORDER-2-ADMIN-LISTED|no' 'ORDER-1-ADMIN-PAYMENT|Vorauskasse' 'ORDER-2-ADMIN-PAYMENT|Rechnung' \
+    'ORDER-1-ADMIN-PAYMENT|-' 'ORDER-2-URL-SHAPE|-' 'PAYREXX-OFFERED|-'; do
+    fx_keys "$f" "$FX_UAT02" "${kv%%|*}" "${kv#*|}"
+    st_eq "verdict_uat02: ${kv%%|*} '${kv#*|}'" FAIL "$(verdict_uat02 "$f")"
+  done
+}
+
+selftest_verdict_uat03() {
+  local f=$ST_TMP/uat03.txt kv
+  fx_keys "$f" "$FX_UAT03"
+  st_eq "verdict_uat03: every key right" PASS "$(verdict_uat03 "$f")"
+  fx_keys "$f" "$FX_UAT03" FORM-WAIT-MS 4000
+  st_eq "verdict_uat03: a wait of exactly 4000 ms" PASS "$(verdict_uat03 "$f")"
+  st_eq "verdict_uat03: no file" NOT-RUN "$(verdict_uat03 "$ST_TMP/absent.txt")"
+  for kv in 'FORM-PAGE|404' 'FORM-WAIT-MS|3999' 'FORM-WAIT-MS|soon' 'FORM-WAIT-MS|' 'MESSAGE-IN-ADMIN|no' \
+    'SPAM-FIELD|email' 'SPAM-ANSWER-SAME|no' 'SPAM-IN-QUARANTINE|no' 'QUARANTINE-REASON|-' \
+    'SPAM-NOT-IN-MESSAGES|no' 'SAME-ORIGIN|no (57 requests, 2 origins)' 'SAME-ORIGIN|-' 'MESSAGE-IN-ADMIN|-'; do
+    fx_keys "$f" "$FX_UAT03" "${kv%%|*}" "${kv#*|}"
+    st_eq "verdict_uat03: ${kv%%|*} '${kv#*|}'" FAIL "$(verdict_uat03 "$f")"
+  done
+}
+
 cmd_selftest() {
   local t=${TMPDIR:-/tmp}
   ST_N=0
@@ -700,6 +838,8 @@ cmd_selftest() {
   selftest_kv_lines
   selftest_leak_scan
   selftest_verdict_uat01
+  selftest_verdict_uat02
+  selftest_verdict_uat03
   if [ "$ST_BAD" -ne 0 ]; then
     echo "SELFTEST FAILED: $ST_BAD of $ST_N cases"
     exit 1
