@@ -117,8 +117,13 @@ JS_ALLOWED=${JS_ALLOWED-cmd/holzcloud/assets/htmx.min.js}
 STABLE=${STABLE:-$ROOT/docs/stable.md}
 README=${README:-$ROOT/README.md}
 STABLE_TITLE='# What 1.0 will promise, and what it still lacks'
-STABLE_AREAS=${STABLE_AREAS-"Template contract"}
-STABLE_REST=${STABLE_REST-""}
+STABLE_AREAS=${STABLE_AREAS-"Template contract
+Data contract
+Migrations
+Upgrade and rollback
+Supported platforms"}
+STABLE_REST=${STABLE_REST-"Outside the 1.0 promise
+Not yet decided"}
 E=${E:-$ROOT/deploy/test/out}
 E32=${E32:-$ROOT/deploy/test/out}
 BASE=${BASE:-}
@@ -582,6 +587,14 @@ selftest() {
   st_run 'stable: a copy that names a document that does not exist' 1 'stable: the page names docs/nosuch.md, which is not a file of' "STABLE=$T/s-nopath.md" -- stable
   sed 's#^\# What 1\.0 will promise, and what it still lacks$#\# Stable#' "$T/stable-good.md" > "$T/s-title.md"
   st_run 'stable: a copy with another title' 1 "stable: the first line of $T/s-title.md is not" "STABLE=$T/s-title.md" -- stable
+  grep -vxF '## Migrations' "$T/stable-good.md" > "$T/s-nomig.md"
+  st_run 'stable: a copy without the heading ## Migrations' 1 "stable: the heading '## Migrations' is missing" "STABLE=$T/s-nomig.md" -- stable
+  sed 's/MCP/mcp tools/g' "$T/stable-good.md" > "$T/s-nomcp.md"
+  st_run 'stable: a copy whose outside section does not name MCP' 1 "stable: '## Outside the 1.0 promise' does not name 'MCP'" "STABLE=$T/s-nomcp.md" -- stable
+  awk '/^## Not yet decided$/ { print "## Decided"; next } { print }' "$T/stable-good.md" > "$T/s-order.md"
+  st_run 'stable: a copy whose last heading is another' 1 "stable: the heading '## Not yet decided' is missing" "STABLE=$T/s-order.md" -- stable
+  awk '/^## Data contract$/ { hold = 1 } /^## Migrations$/ { hold = 0 } !hold { print }' "$T/stable-good.md" > "$T/s-noarea.md"
+  st_run 'stable: a copy without the data contract area' 1 "stable: the heading '## Data contract' is missing" "STABLE=$T/s-noarea.md" -- stable
   grep -vF 'docs/stable.md' "$README" > "$T/readme-nolink.md"
   st_run 'stable: a README without the link' 1 'does not link docs/stable.md' "README=$T/readme-nolink.md" -- stable
   # record
