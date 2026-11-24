@@ -49,8 +49,12 @@
 #           and when E32 holds amd64-t32-src, the gate of phase 32 runs whole after its
 #           merge (`BASE=e1116b3 TIP=93bfb80 E="$E32" bash deploy/test/32-check.sh all`),
 #           which runs the record-check of deploy/test/backup-verify.sh. Every one must end
-#           OK. When a scratch root is missing the rule prints `SKIP record: …` and is
-#           counted as skipped in the last line, never as passed.
+#           OK, and the gate of phase 32 must end `32-CHECK OK (` with no skipped rule
+#           (the count of its rules is its own business). A set that is only partly there
+#           fails the rule: E with only one of amd64-t34-summary.txt and mac-t34-uat, E32
+#           with files named amd64-t32-* and no amd64-t32-src. Only when a set is missing
+#           whole does the rule print `SKIP record: …` and count as skipped, never as
+#           passed; see the last line below for what a skip does to the exit status.
 # stable    docs/stable.md (STABLE) says what 1.0 will promise and what is missing: its first
 #           line is STABLE_TITLE; its level-two headings are exactly the five areas of
 #           STABLE_AREAS and then those of STABLE_REST, in that order; each area has
@@ -98,9 +102,17 @@
 #   JS_ALLOWED  the tracked JavaScript allowed (nojs only); default
 #            cmd/holzcloud/assets/htmx.min.js. Only the selftest sets it to empty.
 #
-# The last line is `34-CHECK OK (N rules)` or `34-CHECK FAILED (K of N)`; the selftest ends
-# `SELFTEST OK (N cases)` or `SELFTEST FAILED (K of N)`. Exit status: 0 every rule passed,
-# 1 a rule failed, 2 usage or a rule could not run.
+# The last line is `34-CHECK OK (N rules)`, `34-CHECK OK (N rules, S skipped)`,
+# `34-CHECK NOT PROVEN (0 rules, S skipped)` or `34-CHECK FAILED (K of N)`; the selftest
+# ends `SELFTEST OK (N cases)` or `SELFTEST FAILED (K of N)`. A skipped rule is not among
+# the N. Exit status: 0 every rule that ran passed and at least one ran, 1 a rule failed,
+# 2 usage or a rule could not run, 77 every requested rule was skipped, so nothing was
+# proven (CI treats 77 as skipped, not as green). When some rules passed and one was
+# skipped, the exit status is 0, because what ran did pass, but the line before the last
+# is `NOT PROVEN: RULE...` naming each skipped rule, so a log that ends `34-CHECK OK (6
+# rules, 1 skipped)` also says which promise was not checked. `all` in a checkout without
+# the scratch roots is exactly that case: it proves the prose rules and not the binding of
+# the records to their scratch files.
 #
 # bash 3.2 and BWK awk (macOS): no mapfile, no associative arrays, no gawk extensions.
 set -u
@@ -455,14 +467,27 @@ EOF_P
   [ "$RULE_FAIL" = 0 ] && ok "stable: $narea areas with a promise and a checklist, $nitems unchecked items that each name a source, $np documents named that exist, and the README links docs/stable.md"
 }
 
-# run_ok DESC PREFIX CMD... : run CMD in ROOT; its last line must begin with PREFIX.
+# run_ok DESC PREFIX CMD... : run CMD in ROOT; its last line must begin with PREFIX. With
+# RUN_NOSKIP=1 in the environment of the call, a last line that says a rule was skipped
+# fails too, because a driver that skipped its own record rule has proven less than asked.
 run_ok() {
   local desc="$1" want="$2" out last
   shift 2
   out=$(cd "$ROOT" && "$@" 2>&1)
   last=$(printf '%s\n' "$out" | tail -n 1)
   case "$last" in
-    "$want"*) echo "ok: record: $desc: $last" ;;
+    "$want"*)
+      if [ "${RUN_NOSKIP:-0}" = 1 ]; then
+        case "$last" in
+          *" skipped)"*)
+            printf '%s\n' "$out" | tail -n 5
+            fail "record: $desc skipped a rule: $last"
+            return
+            ;;
+        esac
+      fi
+      echo "ok: record: $desc: $last"
+      ;;
     *)
       printf '%s\n' "$out" | tail -n 5
       fail "record: $desc did not end '$want…'"
@@ -471,17 +496,25 @@ run_ok() {
 }
 
 rule_record() {
-  local missing="" rec
-  if [ -f "$E/amd64-t34-summary.txt" ] && [ -d "$E/mac-t34-uat" ]; then
+  local missing="" rec has_sum=no has_uat=no
+  [ -f "$E/amd64-t34-summary.txt" ] && has_sum=yes
+  [ -d "$E/mac-t34-uat" ] && has_uat=yes
+  if [ "$has_sum" = yes ] && [ "$has_uat" = yes ]; then
     for rec in deploy/MIGRATION-RESTORE-RUN.md deploy/UPDATE-CHAIN-RUN.md deploy/ROLLBACK-RUN.md; do
       run_ok "upgrade-verify.sh record-check of $rec" 'RECORD-CHECK OK (' env R="$REC_ROOT/$rec" E="$E" bash deploy/test/upgrade-verify.sh record-check
     done
     run_ok "browser-verify.sh record-check of deploy/BROWSER-RUN.md" 'RECORD-CHECK OK (' env R="$REC_ROOT/deploy/BROWSER-RUN.md" E="$E" bash deploy/test/browser-verify.sh record-check
+  elif [ "$has_sum" = yes ] || [ "$has_uat" = yes ]; then
+    # Evidence that is partly there is not evidence that is missing: the half that is
+    # there would go unchecked, and the gate would say nothing.
+    fail "record: $E holds only part of the evidence set (amd64-t34-summary.txt $([ "$has_sum" = yes ] && echo present || echo missing), mac-t34-uat $([ "$has_uat" = yes ] && echo present || echo missing))"
   else
     missing="$missing E ($E holds no amd64-t34-summary.txt and mac-t34-uat)"
   fi
   if [ -d "$E32/amd64-t32-src" ]; then
-    run_ok "32-check.sh all after the merge of phase 32" '32-CHECK OK (5 rules)' env BASE=e1116b3 TIP=93bfb80 E="$E32" bash deploy/test/32-check.sh all
+    RUN_NOSKIP=1 run_ok "32-check.sh all after the merge of phase 32" '32-CHECK OK (' env BASE=e1116b3 TIP=93bfb80 E="$E32" bash deploy/test/32-check.sh all
+  elif ls "$E32"/amd64-t32-* > /dev/null 2>&1; then
+    fail "record: $E32 holds only part of the evidence set of phase 32 (amd64-t32-src missing)"
   else
     missing="$missing E32 ($E32 holds no amd64-t32-src)"
   fi
@@ -600,9 +633,29 @@ selftest() {
   # record
   mkdir -p "$T/empty-e" "$T/bad-e/mac-t34-uat"
   : > "$T/bad-e/amd64-t34-summary.txt"
-  st_run 'record: E and E32 are empty directories, so the rule is skipped and not passed' 0 'SKIP record: no scratch files under' "E=$T/empty-e" "E32=$T/empty-e" -- record
-  st_run 'record: a skipped rule is counted as skipped in the last line' 0 '34-CHECK OK (0 rules, 1 skipped)' "E=$T/empty-e" "E32=$T/empty-e" -- record
+  st_run 'record: E and E32 are empty directories, so the rule is skipped and not passed' "$SKIP" 'SKIP record: no scratch files under' "E=$T/empty-e" "E32=$T/empty-e" -- record
+  st_run 'record: a run in which every rule was skipped proves nothing and exits 77' "$SKIP" '34-CHECK NOT PROVEN (0 rules, 1 skipped)' "E=$T/empty-e" "E32=$T/empty-e" -- record
+  st_run 'record: a skip beside a rule that passed names the skipped rule and still exits 0' 0 'NOT PROVEN: record' "E=$T/empty-e" "E32=$T/empty-e" -- nojs record
+  st_run 'record: a skip beside a rule that passed keeps the count in the last line' 0 '34-CHECK OK (1 rules, 1 skipped)' "E=$T/empty-e" "E32=$T/empty-e" -- nojs record
   st_run 'record: E holds an empty set, so the record-check fails' 1 'record: upgrade-verify.sh record-check of deploy/MIGRATION-RESTORE-RUN.md did not end' "E=$T/bad-e" "E32=$T/empty-e" -- record
+  # A half-present set is evidence that is partly there, and the rule refuses it.
+  mkdir -p "$T/half-summary" "$T/half-uat/mac-t34-uat" "$T/half-t32"
+  : > "$T/half-summary/amd64-t34-summary.txt"
+  : > "$T/half-t32/amd64-t32-pass1.log"
+  st_run 'record: E holds amd64-t34-summary.txt and no mac-t34-uat, so the rule fails and is not skipped' 1 'record: ' "E=$T/half-summary" "E32=$T/empty-e" -- record
+  st_run 'record: the message names what is missing from E (the browser set)' 1 'holds only part of the evidence set (amd64-t34-summary.txt present, mac-t34-uat missing)' "E=$T/half-summary" "E32=$T/empty-e" -- record
+  st_run 'record: E holds mac-t34-uat and no amd64-t34-summary.txt, so the rule fails and is not skipped' 1 'holds only part of the evidence set (amd64-t34-summary.txt missing, mac-t34-uat present)' "E=$T/half-uat" "E32=$T/empty-e" -- record
+  st_run 'record: E32 holds files of phase 32 and no amd64-t32-src, so the rule fails and is not skipped' 1 'holds only part of the evidence set of phase 32 (amd64-t32-src missing)' "E=$T/empty-e" "E32=$T/half-t32" -- record
+  # The coupling to the gate of phase 32 reads its last line, not its rule count. The fake
+  # root has drivers that end OK, and a 32-check.sh that ends as FAKE_LAST says.
+  mkdir -p "$T/fake/deploy/test" "$T/full-e/mac-t34-uat" "$T/full-e32/amd64-t32-src"
+  : > "$T/full-e/amd64-t34-summary.txt"
+  printf '%s\n' '#!/bin/sh' 'echo "RECORD-CHECK OK (1 checks)"' > "$T/fake/deploy/test/upgrade-verify.sh"
+  cp "$T/fake/deploy/test/upgrade-verify.sh" "$T/fake/deploy/test/browser-verify.sh"
+  printf '%s\n' '#!/bin/sh' 'echo "$FAKE_LAST"' > "$T/fake/deploy/test/32-check.sh"
+  st_run 'record: the gate of phase 32 ends with another number of rules, and the rule passes' 0 '34-CHECK OK (1 rules)' "ROOT=$T/fake" "E=$T/full-e" "E32=$T/full-e32" "FAKE_LAST=32-CHECK OK (4 rules)" -- record
+  st_run 'record: the gate of phase 32 skipped its own record rule, and the rule fails' 1 "record: 32-check.sh all after the merge of phase 32 skipped a rule" "ROOT=$T/fake" "E=$T/full-e" "E32=$T/full-e32" "FAKE_LAST=32-CHECK OK (4 rules, 1 skipped)" -- record
+  st_run 'record: the gate of phase 32 fails, and the rule fails' 1 "record: 32-check.sh all after the merge of phase 32 did not end '32-CHECK OK (…'" "ROOT=$T/fake" "E=$T/full-e" "E32=$T/full-e32" "FAKE_LAST=32-CHECK FAILED (1 of 5)" -- record
   if [ "$ST_K" = 0 ]; then
     echo "SELFTEST OK ($ST_N cases)"
     return 0
@@ -633,6 +686,7 @@ done
 N=0
 K=0
 S=0
+SKIPPED=""
 HARD=0
 for rule in $RULES; do
   RULE_FAIL=0
@@ -640,6 +694,7 @@ for rule in $RULES; do
   rc=$?
   if [ "$rc" = "$SKIP" ] && [ "$RULE_FAIL" = 0 ]; then
     S=$((S + 1))
+    SKIPPED="$SKIPPED ${rule}"
     continue
   fi
   N=$((N + 1))
@@ -647,7 +702,16 @@ for rule in $RULES; do
   if [ "$RULE_FAIL" != 0 ] || { [ "$rc" != 0 ] && [ "$rc" != 1 ]; }; then K=$((K + 1)); fi
 done
 if [ "$K" = 0 ]; then
-  if [ "$S" = 0 ]; then echo "34-CHECK OK ($N rules)"; else echo "34-CHECK OK ($N rules, $S skipped)"; fi
+  if [ "$S" = 0 ]; then
+    echo "34-CHECK OK ($N rules)"
+    exit 0
+  fi
+  echo "NOT PROVEN:${SKIPPED}"
+  if [ "$N" = 0 ]; then
+    echo "34-CHECK NOT PROVEN ($N rules, $S skipped)"
+    exit "$SKIP"
+  fi
+  echo "34-CHECK OK ($N rules, $S skipped)"
   exit 0
 fi
 echo "34-CHECK FAILED ($K of $N)"
