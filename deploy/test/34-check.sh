@@ -725,9 +725,23 @@ selftest() {
   T=$(mktemp -d "$TMPROOT/st.XXXXXX")
   wt0=$(git -C "$ROOT" worktree list | grep -c .)
   cp "$BETA" "$T/good.md"
-  base=${BASE:-$(git -C "$ROOT" merge-base origin/main HEAD 2> /dev/null)}
+  # Merged into main, BASE...HEAD is every later change too, so the frozen control
+  # failed on every checkout after the merge of phase 34 (as WR-02 found for
+  # 32-check.sh). Without BASE the selftest pins the pair that bounds phase 34,
+  # cfce101 and its merge af52d7b, when both are here; otherwise it falls back to
+  # the merge base as before.
+  if [ -z "${BASE:-}" ] \
+    && git -C "$ROOT" rev-parse -q --verify "cfce101^{commit}" > /dev/null 2>&1 \
+    && git -C "$ROOT" rev-parse -q --verify "af52d7b^{commit}" > /dev/null 2>&1; then
+    # TIP is never empty here (the header defaults it to HEAD), so without BASE
+    # both bounds are pinned together.
+    base=cfce101
+    tip=af52d7b
+  else
+    base=${BASE:-$(git -C "$ROOT" merge-base origin/main HEAD 2> /dev/null)}
+    tip=${TIP:-HEAD}
+  fi
   base=$(git -C "$ROOT" rev-parse -q --verify "$base^{commit}" 2> /dev/null)
-  tip=${TIP:-HEAD}
   # frozen
   st_run 'frozen: control, the records as they are' 0 'ok: frozen' "BASE=$base" "TIP=$tip" -- frozen
   mkdir -p "$T/rec/deploy"
