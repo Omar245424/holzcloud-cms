@@ -49,12 +49,18 @@ Made in Switzerland, free software under the AGPL-3.0.
 - **The admin works without JavaScript too.** Every action is an ordinary form;
   [htmx](https://htmx.org), served from this server, only makes it quicker.
 - **One static binary, one SQLite file.** No database server, no PHP, no Node,
-  no build step. Built for a small Linux server.
+  no build step. Built for a small Linux server. Every backup carries a checksum
+  file, and the restore refuses a damaged one and names the media files it lacks.
 - **Many websites, many domains.** Requests are routed by `Host`. Sites can be
   multilingual, with `hreflang` and a language picker; the admin comes in German,
   English, French, Italian and Spanish.
 - **A shop for Switzerland.** Products with stock, orders by invoice or payment
   in advance (Payrexx optional), prices in CHF, with or without VAT.
+- **Privacy handled per website.** Choose the legal frameworks that apply (EU,
+  Switzerland, United Kingdom, United States) and get drafts of the privacy
+  statement and the imprint in five languages. Find a person's data to hand it
+  over, correct it or erase it; retention periods delete expired personal data
+  once a day on their own.
 - **No lock-in.** A whole website exports as one readable archive, there is a
   WordPress importer, and `holzcloud export` writes a static copy any web host
   can serve.
@@ -71,6 +77,10 @@ own in the manner of Statamic; see the
 ![Design settings: colours, typeface and text width beside a live phone and desktop preview](docs/screenshots/design.png)
 
 ![The shop overview, opening on what is to be done: overdue payments, orders to send, products running out](docs/screenshots/shop-overview.png)
+
+![Values: a phone number or a price is kept once per website and written into a sentence as a placeholder](docs/screenshots/values.png)
+
+![Privacy: the data held about one person, with the choice to download, print an answer or erase it](docs/screenshots/privacy.png)
 
 ![A website served by holzcloud-CMS with the Weide template](docs/screenshots/public-site.jpg)
 

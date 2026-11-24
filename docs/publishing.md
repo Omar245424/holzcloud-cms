@@ -53,6 +53,23 @@ another page of the site and follows it when it is renamed.
 
 ![Fields of a website](screenshots/custom-fields.png)
 
+**Values.** A value is a short text a website keeps once, such as a price or a
+phone number. Write `[[wert:key]]` into the text of a page, a snippet or a product
+description, and the value appears there; changing it changes every place at
+once, in every language. Titles, search descriptions and menu entries show the
+placeholder as written, and the page lists each such place.
+
+![Values of a website](screenshots/values.png)
+
+**Privacy.** Under *Privacy* a website finds what it holds about one e-mail
+address and can download it, print an answer or erase it; requests that arrive
+by e-mail or through the public form are kept in a list. Retention periods per
+kind of data decide what the server deletes by itself, once a day. Which legal
+frameworks apply is set in the website's settings, and the privacy statement and
+the imprint can be created from them as drafts.
+
+![Privacy: what is held about one person](screenshots/privacy.png)
+
 **Design.** It sits between "pick one of eight templates" and "maintain a
 template of your own": a handful of validated values that every built-in template
 picks up, set beside a live preview that switches between desktop and phone.
