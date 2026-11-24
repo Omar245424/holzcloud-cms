@@ -21,6 +21,38 @@ entries below 0.0.1 carry the numbers of the earlier count (1.4 to 2.9.1); those
 releases and their tags were deleted when the count started again, and the
 entries stay here because they are still the history of this code.
 
+## 0.1.5 — 2026-11-24
+
+### Neu
+
+- Ein Wert wie eine Versions- oder Telefonnummer steht je Website einmal auf der neuen Seite „Werte“ und erscheint überall, wo `[[wert:kennung]]` im Text oder in einer Link-Adresse steht; über MCP lässt er sich lesen und setzen.
+- Je Website lassen sich die Rechtsrahmen EU, Schweiz, Vereinigtes Königreich und USA wählen; daraus entstehen Entwürfe für Datenschutzerklärung und Impressum auf Deutsch, Englisch, Französisch, Italienisch und Rätoromanisch.
+- Eine Website mit dem Rechtsrahmen USA beachtet das Signal Global Privacy Control und bietet die Seite „Do Not Sell or Share“ mit einem Widerspruchsformular.
+- Die Liste „Bereit für den Start?“ nennt, was vor dem Start einer Website noch offen ist.
+- Die Daten einer Person lassen sich finden, herausgeben, berichtigen und löschen, auch in Plugins mit Datenschutz-Schnittstelle, und Besucher stellen ihre Anfrage über ein öffentliches Formular.
+- Je Website gelten Aufbewahrungsfristen, nach denen der Server abgelaufene Personendaten einmal am Tag selbst löscht, und daraus entsteht ein Verzeichnis der Verarbeitungstätigkeiten.
+
+### Verbessert
+
+- Wer nicht veröffentlichen darf, kann Menüs, Textbausteine, Alben, Schlagwörter, Weiterleitungen, verwendete Dateien, Einstellungen, Design und Wortlaut der Website und veröffentlichte Produkte öffnen, aber nicht mehr ändern; ein Plugin sagt mit `respects_read_only`, dass es das ebenso hält.
+- Jede Sicherung enthält eine Datei `SHA256SUMS`, und die Wiederherstellung lehnt eine beschädigte Sicherung ab und nennt Mediendateien, die ihr fehlen.
+- `holzcloud check -files DIR` nennt jede Mediendatei, die in DIR fehlt.
+- `backup.sh` meldet es, wenn das Aufräumen eine alte Sicherung nicht entfernen kann.
+- Ein Programm ab 0.1.5 startet nicht gegen eine Datenbank, die ein neueres schon migriert hat, und ein Neustart nach einer fehlgeschlagenen Migration behält die Sicherung von vor dem Update, statt die halb migrierte Datenbank zu sichern.
+- Die Vorlagen-Spezifikation ist jetzt der Template-Vertrag 1.0: `holzcloud template check` nennt ihn, und ein Theme kann in `theme.json` angeben, für welchen Vertrag es geschrieben ist.
+
+### Behoben
+
+- Der Medienfilter „Unbenutzt“ urteilt nach derselben Regel wie die Anzeige „Verwendet“.
+- Ein Plugin lädt fertig, auch wenn die Anfrage abbricht, die es eingeschaltet hat.
+
+### Gut zu wissen
+
+- Das Update führt die Migrationen 62 bis 69 aus; vorher eine Sicherung machen, wie [deploy/DEPLOY.md](https://github.com/holzcloud/holzcloud-cms/blob/main/deploy/DEPLOY.md) es beschreibt.
+- Bestehende Websites folgen danach den Rechtsrahmen EU und Schweiz; wer andere braucht, wählt sie in den Einstellungen der Website.
+- Programme vor 0.1.5 kennen diese Weigerung nicht: Wer nach dem Update auf 0.1.4 zurückgeht, setzt dazu die Datenbank von vor dem Update wieder ein, wie *Rolling back* in deploy/DEPLOY.md es beschreibt.
+- Bricht die Anfrage genau beim Einschalten eines Plugins ab, kann es in seltenen Fällen eingeschaltet, aber nicht geladen bleiben; dann das Plugin aus- und wieder einschalten oder den Dienst neu starten.
+
 ## 0.1.4 — 2026-11-12
 
 ### Verbessert
