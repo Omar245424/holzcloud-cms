@@ -1,12 +1,12 @@
 # Native amd64 and the real server: hand-over
 
-This document is the record of phase 26. It hands over three requirements that this machine cannot play: SRV-01 (the five plugins under `MemoryDenyWriteExecute=true` and the backup timings, on native amd64), SRV-02 (a restore on a real server, from a backup made there, to a different path) and SRV-03 (a reboot with the service and timer units enabled). It is not a result: until the owner's output is pasted and `bash deploy/test/native-amd64.sh record-check` accepts the `recorded` form, nothing in it is evidence for any of the three.
+This document is the record of phase 26. It hands over three requirements that this machine cannot play: SRV-01 (the five plugins under `MemoryDenyWriteExecute=true` and the backup timings, on native amd64), SRV-02 (a restore on a real server, from a backup made there, to a different path) and SRV-03 (a reboot with the service and timer units enabled). Of the three, SRV-01 is a result: the owner's output of run 41200578718, made on a GitHub-hosted amd64 runner from commit 3a29a1c, was pasted on 2026-10-31, and `bash deploy/test/native-amd64.sh record-check` accepts its `recorded` form. SRV-02 and SRV-03 are not results: until the owner's output for one of them is pasted and `record-check` accepts the `recorded` form, nothing in this record is evidence for it.
 
-What exists is the instrument and the steps. The instrument is a button, `.github/workflows/native-amd64.yml` (manual dispatch only, a read-only token, no secret, the three official actions `ci.yml` already pins), the verdict rules and the checker in `deploy/test/native-amd64.sh`, and the harness `deploy/test/run.sh`, unchanged. The steps are O-1 to O-3 below; the expected output of O-2 and O-3 was observed in a container rehearsal and is quoted there as such. What does not exist is any native amd64 figure and any result from a real server. This record says what was prepared, what was seen while preparing it, and what is not claimed.
+What exists is the instrument and the steps. The instrument is a button, `.github/workflows/native-amd64.yml` (manual dispatch only, a read-only token, no secret, the three official actions `ci.yml` already pins), the verdict rules and the checker in `deploy/test/native-amd64.sh`, and the harness `deploy/test/run.sh`, unchanged. The steps are O-1 to O-3 below; the expected output of O-2 and O-3 was observed in a container rehearsal and is quoted there as such. What does not exist is any result from a real server; the native amd64 figures that exist were measured on the runner of SRV-01 and are recorded below. This record says what was prepared, what was seen while preparing it, and what is not claimed.
 
 `deploy/SECURITY-SCORE.md` says "No native amd64 run was made and none is planned (user decision)". The milestone that opened on 2026-10-20 reversed that decision (SRV-01). The sentence, and the matching lines of `docs/beta.md`, stay as they are written: `docs/beta.md` is phase 28's, and `deploy/SECURITY-SCORE.md` is cited byte for byte by it. The hand-over is at the end of this record.
 
-Every requirement is in one of two states, `pending owner` or `recorded`. `bash deploy/test/native-amd64.sh record-check` accepts the first without a claim and refuses the second unless the evidence for it is in the record; `bash deploy/test/native-amd64.sh status-check` holds `.planning/REQUIREMENTS.md` to the record. The state of this record is `pending owner` for all three.
+Every requirement is in one of two states, `pending owner` or `recorded`. `bash deploy/test/native-amd64.sh record-check` accepts the first without a claim and refuses the second unless the evidence for it is in the record; `bash deploy/test/native-amd64.sh status-check` holds `.planning/REQUIREMENTS.md` to the record. The state of this record is `recorded` for SRV-01 and `pending owner` for SRV-02 and SRV-03.
 
 ## Summary
 
@@ -36,15 +36,15 @@ Three files exist because of this phase: `.github/workflows/native-amd64.yml`, `
 
 **What it will show.** Whether the five shipped plugins (`kontaktformular`, `bestellung`, `nicht-gefunden`, `suche`, `jahreszahl`) load and run under the shipped `holzcloud.service` with `MemoryDenyWriteExecute=true` on a native x86_64 kernel that enforces seccomp, and which wazero engine runs them (`ENGINE-SHIPPED`); and what `backup.sh` and `restore.sh` cost on native amd64, as two data points (the seed site, and the same site with 300 MB of synthetic media), set against the emulation figures below. The work is done by the existing harness: `run.sh mdwe` (build, up, start, canary, seed, check, mdwe-control, verdict) and `run.sh backup-chain` with `BULK_MB=300`, the recipe that made the emulation figures. The new rule is on top: `deploy/test/native-amd64.sh` decides the word.
 
-**What it does not show.** The runner's own systemd (Ubuntu 24.04, systemd 255) is not exercised; the work is done in a container with Debian's systemd 252, the recipe already proven on native arm64 (R2 of `deploy/SECURITY-SCORE.md`). A runner is a virtual machine on shared hardware with a cold cache, not the owner's server, and two readings are two readings, not a rate. Only two directives were probed on arm64 and only the plugin runtime is exercised here, not the whole of `systemd-analyze security`.
+**What it does not show.** The runner's own systemd is not exercised; the work is done in a container with Debian's systemd 252, the recipe already proven on native arm64 (R2 of `deploy/SECURITY-SCORE.md`). This paragraph was written expecting Ubuntu 24.04 with systemd 255 on the runner; the runner of the recorded run was Ubuntu 26.04.1 LTS (`amd64-native-mdwe/versions.txt` in the appendix), and the version of its systemd is not in the evidence. A runner is a virtual machine on shared hardware with a cold cache, not the owner's server, and two readings are two readings, not a rate. Only two directives were probed on arm64 and only the plugin runtime is exercised here, not the whole of `systemd-analyze security`.
 
-The figures the native ones are set against, from the `POINT` lines of `deploy/BACKUP-RUN.md` (amd64 under emulation on an aarch64 host):
+The figures the native ones are set against, from the `POINT` lines of `deploy/BACKUP-RUN.md` (amd64 under emulation on an aarch64 host), and the native ones of the runner, from the `POINT` lines of the pasted summary below:
 
-| Figure | Emulation, seed point | Native (pending owner) | Emulation, bulk point (300 MB) | Native (pending owner) |
+| Figure | Emulation, seed point | Native, seed point (runner) | Emulation, bulk point (300 MB) | Native, bulk point (runner) |
 |--------|-----------------------|------------------------|--------------------------------|------------------------|
-| `BACKUP-WALL-S` | 0.692 | | 1.015 | |
-| `RESTORE-WALL-S` | 8.126 | | 8.296 | |
-| `START-READY-S` | 7.397 | | 7.379 | |
+| `BACKUP-WALL-S` | 0.692 | 0.258 | 1.015 | 0.507 |
+| `RESTORE-WALL-S` | 8.126 | 3.338 | 8.296 | 3.571 |
+| `START-READY-S` | 7.397 | 3.049 | 7.379 | 3.049 |
 
 ```text
 POINT seed: BACKUP-BYTES=20548955 BACKUP-WALL-S=0.692 RESTORE-WALL-S=8.126 VERIFY-S=0.083 STOP-MOVE-COPY-S=0.455 START-READY-S=7.397
@@ -119,14 +119,14 @@ Result (owner): pending
 
 | Aspect | In the container or on the runner | On the owner's server | Measured or assumed |
 |--------|-----------------------------------|-----------------------|---------------------|
-| The platform of SRV-01 | A GitHub-hosted runner: an Azure virtual machine with an Ubuntu image, its own systemd 255 not exercised; the work is done in a privileged container with Debian 12 and systemd 252 | The owner's server, Debian or Ubuntu with its own systemd | Not measured; the runner path is assumed to boot systemd in a privileged container with the default flags (the `docker_run_args` input is the hook if it does not) |
-| A privileged container | `--privileged`, a cgroup namespace the runner's Docker decides, no published port | A plain host | Measured on arm64 (R2), assumed on the runner |
-| Emulation against native | The rehearsals here ran amd64 under emulation on aarch64; the native run has x86_64 hardware and a kernel that enforces seccomp | The same hardware class as the runner or better | The emulation figures are measured (`deploy/BACKUP-RUN.md`); the native ones are pending owner |
+| The platform of SRV-01 | A GitHub-hosted runner: an Azure virtual machine with an Ubuntu image, its own systemd not exercised (Ubuntu 26.04.1 LTS in the recorded run); the work is done in a privileged container with Debian 12 and systemd 252 | The owner's server, Debian or Ubuntu with its own systemd | Measured once on the runner: in run 41200578718 the privileged container booted Debian's systemd 252 and the run passed; the owner's server is not measured |
+| A privileged container | `--privileged`, a cgroup namespace the runner's Docker decides, no published port | A plain host | Measured on arm64 (R2) and once on the runner (SRV-01) |
+| Emulation against native | The rehearsals here ran amd64 under emulation on aarch64; the native run has x86_64 hardware and a kernel that enforces seccomp | The same hardware class as the runner or better | The emulation figures are measured (`deploy/BACKUP-RUN.md`); the native ones were measured once on the runner (the `POINT` lines of SRV-01) |
 | The second unit against a spare machine | O-2 runs the copy as a second unit on the same host, on port 8081, with its own data path | The same: the copy lives next to production for the length of the step | Measured in the container rehearsal; on the server pending owner |
 | A container restart against a reboot | `docker restart`: the Docker VM's kernel stays, `uptime -s` and the boot id do not change, `journalctl -b` does not separate the starts | A new kernel, a new boot id, the unit started by the boot target | Measured in the rehearsal as a restart (PID 1's start time changed); a reboot is pending owner |
 | Journal and boot ordering | Whatever the container's journal holds; no network target, mount or clock synchronisation to wait for | The machine's own | Assumed |
 | Warm cache | A container started minutes before its backup, the data in the page cache | A cold cache after a reboot, and a restore from a backup that may be days old | Not measured |
-| The unit drop-in | `ProcSubset=all` on the units in the emulated rehearsals (the crash it answers is an emulation crash); the runner path starts the unit as shipped unless the harness meets the same crash | The unit as shipped | Measured on emulation; native pending owner |
+| The unit drop-in | `ProcSubset=all` on the units in the emulated rehearsals (the crash it answers is an emulation crash); the runner path starts the unit as shipped unless the harness meets the same crash | The unit as shipped | Measured on emulation; on the runner the native backup chain lists no `dropin` among its deviations (`DEVIATIONS: backup-name fixture mount scp timer transfer`) |
 
 ## Not tested
 
@@ -395,9 +395,11 @@ Phase 28 (DOC-01, DOC-02) cites this record. `docs/beta.md` is not edited by thi
 
 The rule is the same for all five: a line moves only when the matching `Status:` is `recorded` and `bash deploy/test/native-amd64.sh record-check` ends `OK` (and `status-check` with it). While any of O-1, O-2 and O-3 is `pending owner`, DOC-02's OWNER-STEPS lists it, with the steps of this record. The sentence of `deploy/SECURITY-SCORE.md` that says no native amd64 run is planned (user decision) is superseded by SRV-01 and is not edited: `docs/beta.md` cites that file byte for byte, so phase 28 decides whether and how the citation changes.
 
+SRV-01 has been recorded since 2026-10-31 (run 41200578718, evidence commit 3a29a1c). `docs/beta.md` therefore words its lines of SRV-01 as what that run did not show: a run on a real server, the host's own systemd, the seccomp-based directives other than the two the canary probes, and the timing on the owner's server. SRV-02 and SRV-03 are pending owner, and their lines stand as they were.
+
 ## Appendix: raw output
 
-This appendix is empty until SRV-01 is recorded. It is assembled with `bash deploy/test/native-amd64.sh appendix`: a fixed list of thirteen files, each as a level-four heading `DIRECTORY/FILE` and a text block that holds the file unchanged, taken from the evidence artifact unpacked under `deploy/test/out`. It is pasted below this paragraph in the commit that records SRV-01. `record-check` then compares every block with its file byte for byte (a missing final newline is normalised) and the block of `amd64-native/native-summary.txt` with the `Result (owner)` block of SRV-01. The files that are never pasted are `step-NN.txt`, `seed.txt`, logs, cookie jars and key files; the evidence bundle drops them before the artifact is made.
+This appendix was empty until SRV-01 was recorded. It is assembled with `bash deploy/test/native-amd64.sh appendix`: a fixed list of thirteen files, each as a level-four heading `DIRECTORY/FILE` and a text block that holds the file unchanged, taken from the evidence artifact unpacked under `deploy/test/out`. It was pasted below this paragraph in the commit that recorded SRV-01, e117574. `record-check` then compares every block with its file byte for byte (a missing final newline is normalised) and the block of `amd64-native/native-summary.txt` with the `Result (owner)` block of SRV-01. The files that are never pasted are `step-NN.txt`, `seed.txt`, logs, cookie jars and key files; the evidence bundle drops them before the artifact is made.
 
 #### amd64-native/native-summary.txt
 
