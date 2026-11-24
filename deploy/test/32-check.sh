@@ -6,9 +6,13 @@
 # RULE is one of frozen, quotes, ledger, deploy, record, all, selftest:
 #
 # frozen    the evidence still holds: the SHA of the single `Evidence commit:` line of the
-#           record is a commit, the bound files of the set (BOUND below) and the source of
-#           the binary (cmd, internal, go.mod, go.sum, changelog.go, CHANGELOG.md) are
-#           unchanged between it and HEAD, and the files the phase changed (BASE...TIP) are
+#           record is a commit, the bound files of the set (BOUND below) are unchanged
+#           between it and HEAD, the source of the binary (cmd, internal, go.mod, go.sum,
+#           changelog.go, CHANGELOG.md) changed in nothing but CHANGELOG.md and there only
+#           by new version sections (one block of lines directly above the older first `## `
+#           line, all of its level-two headings `## X.Y.Z — YYYY-MM-DD` of a version no
+#           older heading has, every older line and the preamble byte for byte as they
+#           were), and the files the phase changed (BASE...TIP) are
 #           exactly the list of PHASE_FILES. BASE is required; the rule refuses to run
 #           without it. TIP is HEAD unless set, so on the branch of phase 32 the rule is
 #           what it was. After the merge, BASE...HEAD lists every later phase too, so the
@@ -98,7 +102,7 @@ REQUIRED_ROWS="P-23 P-24 P-25 P-26 E-7 E-8"
 MIN_LIMITS=6
 
 # The bound files of the evidence set, as the record names them, and the source of the
-# binary under test.
+# binary under test; src_since lets a release change CHANGELOG.md, and only by new sections.
 BOUND="deploy/backup.sh deploy/restore.sh deploy/DEPLOY.md deploy/holzcloud-backup.service deploy/holzcloud-backup.timer deploy/test/run.sh deploy/test/Dockerfile deploy/test/backup-verify.sh"
 BINARY_SRC="cmd internal go.mod go.sum changelog.go CHANGELOG.md"
 
@@ -186,6 +190,59 @@ ledger_rows() {
     on { n++; if (n > 1) print }'
 }
 # not_in A B : the lines of A that are not lines of B.
+
+# changelog_added OLD NEW : NEW is OLD, or OLD with one block of lines inserted directly
+# above OLD's first level-two heading, in which every level-two heading is a new version
+# heading (## X.Y.Z — YYYY-MM-DD, a version no older heading has). Prints one reason line
+# and returns 1 when it is not. The prefix and the suffix are compared byte for byte, so
+# an older line cannot be edited, moved or removed on the way.
+changelog_added() {
+  local old="$1" new="$2" k nold nnew a h v ere
+  ere='^## [0-9]+\.[0-9]+\.[0-9]+ — [0-9]{4}-[0-9]{2}-[0-9]{2}$'
+  cmp -s "$old" "$new" && return 0
+  k=$(grep -n '^## ' "$old" | head -n 1 | cut -d: -f1)
+  [ -n "$k" ] || { echo "CHANGELOG.md: the older file has no version heading"; return 1; }
+  nold=$(wc -l < "$old" | tr -d ' ')
+  nnew=$(wc -l < "$new" | tr -d ' ')
+  a=$((nnew - nold))
+  head -n "$((k - 1))" "$old" > "$TMPROOT/cl-a"
+  head -n "$((k - 1))" "$new" > "$TMPROOT/cl-b"
+  cmp -s "$TMPROOT/cl-a" "$TMPROOT/cl-b" || { echo "CHANGELOG.md: a line above its first version heading changed"; return 1; }
+  if [ "$a" -le 0 ]; then
+    echo "CHANGELOG.md: the change is not new lines directly above its first version heading; an older line changed, moved or was removed"
+    return 1
+  fi
+  tail -n "+$k" "$old" > "$TMPROOT/cl-a"
+  tail -n "+$((k + a))" "$new" > "$TMPROOT/cl-b"
+  cmp -s "$TMPROOT/cl-a" "$TMPROOT/cl-b" || { echo "CHANGELOG.md: the change is not new lines directly above its first version heading; an older line changed, moved or was removed"; return 1; }
+  sed -n "${k},$((k + a - 1))p" "$new" > "$TMPROOT/cl-block"
+  head -n 1 "$TMPROOT/cl-block" | grep -qE "$ere" || { echo "CHANGELOG.md: the added lines do not begin with a version heading (## X.Y.Z — YYYY-MM-DD)"; return 1; }
+  while IFS= read -r h; do
+    printf '%s\n' "$h" | grep -qE "$ere" || { echo "CHANGELOG.md: an added level-two heading is not a version heading: $h"; return 1; }
+    v=$(printf '%s\n' "$h" | awk '{ print $2 }')
+    if V="$v" awk 'BEGIN { p = "## " ENVIRON["V"] " " } index($0, p) == 1 { f = 1 } END { exit f ? 0 : 1 }' "$TMPROOT/cl-a"; then
+      echo "CHANGELOG.md: the added heading $h names a version an older heading already has"
+      return 1
+    fi
+  done < <(grep '^## ' "$TMPROOT/cl-block")
+  return 0
+}
+# src_since FROM : the source of the binary (BINARY_SRC) changed between FROM and HEAD in
+# nothing but new version sections of CHANGELOG.md. Prints the reason and returns 1 if not.
+src_since() {
+  local from="$1" names other
+  # shellcheck disable=SC2086
+  names=$(git -C "$ROOT" diff --name-only "$from" HEAD -- $BINARY_SRC)
+  [ -n "$names" ] || return 0
+  other=$(printf '%s\n' "$names" | grep -vxF CHANGELOG.md | tr '\n' ' ' | sed 's/ $//')
+  if [ -n "$other" ]; then
+    echo "beyond CHANGELOG.md: $other"
+    return 1
+  fi
+  git -C "$ROOT" show "$from:CHANGELOG.md" > "$TMPROOT/cl-old" 2> /dev/null || { echo "CHANGELOG.md: not in $from"; return 1; }
+  git -C "$ROOT" show "HEAD:CHANGELOG.md" > "$TMPROOT/cl-new" 2> /dev/null || { echo "CHANGELOG.md: not in HEAD"; return 1; }
+  changelog_added "$TMPROOT/cl-old" "$TMPROOT/cl-new"
+}
 not_in() { printf '%s\n' "$1" | while IFS= read -r l; do [ -n "$l" ] || continue; printf '%s\n' "$2" | grep -qxF -- "$l" || printf '%s ' "$l"; done; }
 
 # --------------------------------------------------------------- rules ----
@@ -211,9 +268,7 @@ rule_frozen() {
     moved=$(git -C "$ROOT" diff --name-only "$sha" HEAD -- $BOUND | tr '\n' ' ')
     fail "frozen: a bound file moved since the evidence commit $sha: $moved"
   fi
-  # shellcheck disable=SC2086
-  if ! git -C "$ROOT" diff --quiet "$sha" HEAD -- $BINARY_SRC; then
-    moved=$(git -C "$ROOT" diff --name-only "$sha" HEAD -- $BINARY_SRC | tr '\n' ' ')
+  if ! moved=$(src_since "$sha"); then
     fail "frozen: the source of the binary moved since the evidence commit $sha: $moved"
   fi
   got=$(git -C "$ROOT" diff --name-only "$BASE...$TIP" | sort)
@@ -221,7 +276,7 @@ rule_frozen() {
   if [ "$got" != "$want" ]; then
     fail "frozen: the files changed in $BASE...$TIP (TIP $TIP) are not the files of the phase; extra: $(not_in "$got" "$want")missing: $(not_in "$want" "$got")"
   fi
-  [ "$RULE_FAIL" = 0 ] && ok "frozen: the 8 bound files and $BINARY_SRC unchanged since $sha, and $BASE...$TIP changed exactly the $(printf '%s\n' "$want" | grep -c .) files of the phase"
+  [ "$RULE_FAIL" = 0 ] && ok "frozen: the 8 bound files unchanged and $BINARY_SRC unchanged but for new version sections of CHANGELOG.md since $sha, and $BASE...$TIP changed exactly the $(printf '%s\n' "$want" | grep -c .) files of the phase"
 }
 
 rule_quotes() {
@@ -348,8 +403,24 @@ t_after() { O="$1" N="$2" awk 'BEGIN { o = ENVIRON["O"]; n = ENVIRON["N"] } { pr
 # t_drop_line LINE < FILE : the file without the lines that begin with LINE.
 t_drop_line() { O="$1" awk 'BEGIN { o = ENVIRON["O"] } index($0, o) != 1 { print }'; }
 
+# t_commit DIR : commit every tracked change in DIR, as upgrade-verify.sh does.
+t_commit() {
+  git -C "$1" -c user.name=t32 -c user.email=t32@invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -am selftest
+}
+# t_cl_top VERSION DATE < FILE : a new section, directly above the first level-two heading.
+t_cl_top() {
+  V="$1" D="$2" awk 'BEGIN { v = ENVIRON["V"]; d = ENVIRON["D"] }
+    !done && /^## / { printf "## %s — %s\n\n### Neu\n\n- Ein Fall des Selbsttests.\n\n", v, d; done = 1 } { print }'
+}
+# t_cl_case DIR : in the clone DIR, reset to HEADSHA and add a new top section to
+# CHANGELOG.md. The caller edits further and commits.
+t_cl_case() {
+  git -C "$1" -c core.hooksPath=/dev/null checkout -q -f --detach "$HEADSHA" || return 1
+  t_cl_top 9.9.9 2099-01-01 < "$1/CHANGELOG.md" > "$1/CHANGELOG.md.new" && mv "$1/CHANGELOG.md.new" "$1/CHANGELOG.md"
+}
+
 selftest() {
-  local T base tip
+  local T base tip tipsha
   T=$(mktemp -d "$TMPROOT/st.XXXXXX")
   cp "$BETA" "$T/good.md"
   cp "$DEPLOY_MD" "$T/deploy-good.md"
@@ -399,6 +470,27 @@ selftest() {
   else
     st_skip 'frozen: after the merge, phase 32 compared on its own merge (BASE=e1116b3 TIP=93bfb80): the commits are not in this clone'
     st_skip 'frozen: TIP unset compares against HEAD, and says so: e1116b3 is not in this clone'
+  fi
+  # A scratch clone of ROOT with one commit on top of HEAD per case. The cases need the
+  # pinned bounds, like the control. TIP is resolved here: inside the clone, HEAD is the
+  # case's commit and would make BASE...TIP list the case.
+  if [ "$control_ok" = 1 ] && [ -n "$base" ]; then
+    HEADSHA=$(git -C "$ROOT" rev-parse HEAD)
+    tipsha=$(git -C "$ROOT" rev-parse -q --verify "$tip^{commit}")
+    git -c core.hooksPath=/dev/null clone -q --shared --no-checkout "$ROOT" "$T/clone" 2> /dev/null
+    t_cl_case "$T/clone"
+    t_commit "$T/clone"
+    st_run 'frozen: a commit that adds a new top section to CHANGELOG.md passes' 0 'ok: frozen' "ROOT=$T/clone" "BASE=$base" "TIP=$tipsha" -- frozen
+    t_cl_case "$T/clone"
+    printf '// selftest\n' >> "$T/clone/changelog.go"
+    t_commit "$T/clone"
+    st_run 'frozen: a commit that also changes changelog.go fails' 1 'beyond CHANGELOG.md: changelog.go' "ROOT=$T/clone" "BASE=$base" "TIP=$tipsha" -- frozen
+    t_cl_case "$T/clone"
+    sed 's/^## 0\.1\.4 — 2026-11-12$/## 0.1.4 — 2026-11-13/' "$T/clone/CHANGELOG.md" > "$T/clone/CHANGELOG.md.new" && mv "$T/clone/CHANGELOG.md.new" "$T/clone/CHANGELOG.md"
+    t_commit "$T/clone"
+    st_run 'frozen: a commit that adds a section and edits an older line of CHANGELOG.md fails' 1 'an older line changed, moved or was removed' "ROOT=$T/clone" "BASE=$base" "TIP=$tipsha" -- frozen
+  else
+    st_skip 'frozen: the three cases of a commit that changes CHANGELOG.md: no BASE given and the bounds of phase 32 are not in this clone'
   fi
   # quotes
   st_run 'quotes: control, the page as it is' 0 'ok: quotes' "BETA=$T/good.md" "R=$R" -- quotes

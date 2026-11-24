@@ -8,8 +8,14 @@
 #
 # frozen    the evidence still holds: each record of RECORDS has exactly one
 #           `Evidence commit:` line naming a commit of ROOT, and between that commit and
-#           HEAD neither the bound files of its driver nor the source of the binary (cmd,
-#           internal, go.mod, go.sum, changelog.go, CHANGELOG.md) changed. The bound files
+#           HEAD the bound files of its driver did not change and the source of the binary
+#           (cmd, internal, go.mod, go.sum, changelog.go, CHANGELOG.md) changed in nothing
+#           but CHANGELOG.md, and there only by new version sections: one block of lines
+#           inserted directly above the older first `## ` line, whose level-two headings are
+#           all `## X.Y.Z — YYYY-MM-DD` of a version no older heading has, with every older
+#           line and everything above the first heading byte for byte as it was. RECORD_AT
+#           must be an ancestor of HEAD and must hold the full binary source (CHANGELOG.md
+#           included) of every evidence commit. The bound files
 #           are read from the `BOUND_FILES=` line of the driver that made the record
 #           (deploy/test/upgrade-verify.sh for the three container records,
 #           deploy/test/browser-verify.sh for deploy/BROWSER-RUN.md,
@@ -45,8 +51,13 @@
 #           committed as a file.
 # record    when E holds amd64-t34-summary.txt and mac-t34-uat, the record-check of
 #           deploy/test/upgrade-verify.sh for each of its three records and that of
-#           deploy/test/browser-verify.sh prove the records against their scratch files,
-#           and when E32 holds amd64-t32-src, the gate of phase 32 runs whole after its
+#           deploy/test/browser-verify.sh prove the records against their scratch files.
+#           They run in a temporary git worktree at RECORD_AT, removed again, after the
+#           rule has proved that RECORD_AT is an ancestor of HEAD, that the binary's source
+#           differs from it at most by new version sections of CHANGELOG.md, and that the
+#           bound files of both drivers are equal at RECORD_AT and HEAD, so the driver code
+#           that runs is byte for byte the code of HEAD. When E32 holds amd64-t32-src, the
+#           gate of phase 32 runs whole at ROOT after its
 #           merge (`BASE=e1116b3 TIP=93bfb80 E="$E32" bash deploy/test/32-check.sh all`),
 #           which runs the record-check of deploy/test/backup-verify.sh. Every one must end
 #           OK, and the gate of phase 32 must end `32-CHECK OK (` with no skipped rule
@@ -72,6 +83,13 @@
 # selftest  one negative case per rule, each beside a control that passes, on copies in a
 #           temporary directory; the real files are never written.
 #
+# Why RECORD_AT. A release adds its CHANGELOG.md entry after the evidence commits, and the
+# records prove nothing about the text of the changelog (the owner's decision of 2026-11-24;
+# the seventh command of docs/beta.md already leaves it out). The drivers embed CHANGELOG.md
+# in their binary source, compare it with HEAD, and are bound files of their own evidence,
+# so they cannot change. Their record-checks therefore run where HEAD is RECORD_AT, after
+# this gate has proved the step from RECORD_AT to HEAD.
+#
 # Why a second gate. deploy/test/32-check.sh is the gate of phase 32 and checks the rows
 # that rest on deploy/BACKUP-VERIFY-RUN.md; it stays as it is, because it is the gate of
 # record of that phase. Each phase's gate checks its own rows. This one is its sibling: the
@@ -87,6 +105,9 @@
 #   BASE     the commit the phase branched from (frozen only), for example
 #            BASE=$(git merge-base origin/main HEAD)
 #   TIP      the end of the phase's change (frozen only); default HEAD
+#   RECORD_AT  the newest commit whose binary source is that of the evidence commits (the
+#            head of main when 0.1.5 was audited), default daf307f; record runs the
+#            drivers' record-checks there, and frozen proves it
 #   BETA     the page of promises; default $ROOT/docs/beta.md
 #   E        the scratch root of the evidence sets of phase 34, amd64-t34-* and mac-t34-*
 #            (record only); default $ROOT/deploy/test/out
@@ -140,8 +161,16 @@ E=${E:-$ROOT/deploy/test/out}
 E32=${E32:-$ROOT/deploy/test/out}
 BASE=${BASE:-}
 TIP=${TIP:-HEAD}
+RECORD_AT=${RECORD_AT:-daf307f}
+# The drivers now run in another directory, so a path given relative is made absolute here,
+# as the caller meant it.
+for v in ROOT REC_ROOT E E32; do
+  eval "x=\${$v}"
+  case "$x" in /*) ;; *) eval "$v=\"\$PWD/\$x\"" ;; esac
+done
 
-# The source of the binary under test, as the drivers name it (BINARY_SOURCE).
+# The source of the binary under test, as the drivers name it (BINARY_SOURCE). CHANGELOG.md
+# is the one path src_since lets a release change, and only by new version sections.
 BINARY_SRC="cmd internal go.mod go.sum changelog.go CHANGELOG.md"
 
 # Every file phase 34 changed, sorted as `sort` prints them under LC_ALL=C. The frozen rule
@@ -184,7 +213,14 @@ SCHEMA_OLD='- The schema and the migrations are not promised stable, and an olde
 LEDGER_HEAD='| 0.1.1 said | 0.1.5 says | Promise rows |'
 
 TMPROOT=$(mktemp -d) || exit 2
-trap 'rm -rf "$TMPROOT"' EXIT
+# WT is the worktree of RECORD_AT while the record rule has one. It is removed by name, never
+# with git's prune subcommand, which would touch worktrees that are not this gate's.
+WT=""
+cleanup() {
+  [ -z "$WT" ] || git -C "$ROOT" worktree remove --force "$WT" > /dev/null 2>&1
+  rm -rf "$TMPROOT"
+}
+trap cleanup EXIT
 
 RULE_FAIL=0
 SKIP=77
@@ -232,6 +268,59 @@ bound_of() {
   sed -n 's/^BOUND_FILES="\(.*\)"$/\1/p' "$ROOT/$1"
 }
 # not_in A B : the lines of A that are not lines of B.
+
+# changelog_added OLD NEW : NEW is OLD, or OLD with one block of lines inserted directly
+# above OLD's first level-two heading, in which every level-two heading is a new version
+# heading (## X.Y.Z — YYYY-MM-DD, a version no older heading has). Prints one reason line
+# and returns 1 when it is not. The prefix and the suffix are compared byte for byte, so
+# an older line cannot be edited, moved or removed on the way.
+changelog_added() {
+  local old="$1" new="$2" k nold nnew a h v ere
+  ere='^## [0-9]+\.[0-9]+\.[0-9]+ — [0-9]{4}-[0-9]{2}-[0-9]{2}$'
+  cmp -s "$old" "$new" && return 0
+  k=$(grep -n '^## ' "$old" | head -n 1 | cut -d: -f1)
+  [ -n "$k" ] || { echo "CHANGELOG.md: the older file has no version heading"; return 1; }
+  nold=$(wc -l < "$old" | tr -d ' ')
+  nnew=$(wc -l < "$new" | tr -d ' ')
+  a=$((nnew - nold))
+  head -n "$((k - 1))" "$old" > "$TMPROOT/cl-a"
+  head -n "$((k - 1))" "$new" > "$TMPROOT/cl-b"
+  cmp -s "$TMPROOT/cl-a" "$TMPROOT/cl-b" || { echo "CHANGELOG.md: a line above its first version heading changed"; return 1; }
+  if [ "$a" -le 0 ]; then
+    echo "CHANGELOG.md: the change is not new lines directly above its first version heading; an older line changed, moved or was removed"
+    return 1
+  fi
+  tail -n "+$k" "$old" > "$TMPROOT/cl-a"
+  tail -n "+$((k + a))" "$new" > "$TMPROOT/cl-b"
+  cmp -s "$TMPROOT/cl-a" "$TMPROOT/cl-b" || { echo "CHANGELOG.md: the change is not new lines directly above its first version heading; an older line changed, moved or was removed"; return 1; }
+  sed -n "${k},$((k + a - 1))p" "$new" > "$TMPROOT/cl-block"
+  head -n 1 "$TMPROOT/cl-block" | grep -qE "$ere" || { echo "CHANGELOG.md: the added lines do not begin with a version heading (## X.Y.Z — YYYY-MM-DD)"; return 1; }
+  while IFS= read -r h; do
+    printf '%s\n' "$h" | grep -qE "$ere" || { echo "CHANGELOG.md: an added level-two heading is not a version heading: $h"; return 1; }
+    v=$(printf '%s\n' "$h" | awk '{ print $2 }')
+    if V="$v" awk 'BEGIN { p = "## " ENVIRON["V"] " " } index($0, p) == 1 { f = 1 } END { exit f ? 0 : 1 }' "$TMPROOT/cl-a"; then
+      echo "CHANGELOG.md: the added heading $h names a version an older heading already has"
+      return 1
+    fi
+  done < <(grep '^## ' "$TMPROOT/cl-block")
+  return 0
+}
+# src_since FROM : the source of the binary (BINARY_SRC) changed between FROM and HEAD in
+# nothing but new version sections of CHANGELOG.md. Prints the reason and returns 1 if not.
+src_since() {
+  local from="$1" names other
+  # shellcheck disable=SC2086
+  names=$(git -C "$ROOT" diff --name-only "$from" HEAD -- $BINARY_SRC)
+  [ -n "$names" ] || return 0
+  other=$(printf '%s\n' "$names" | grep -vxF CHANGELOG.md | tr '\n' ' ' | sed 's/ $//')
+  if [ -n "$other" ]; then
+    echo "beyond CHANGELOG.md: $other"
+    return 1
+  fi
+  git -C "$ROOT" show "$from:CHANGELOG.md" > "$TMPROOT/cl-old" 2> /dev/null || { echo "CHANGELOG.md: not in $from"; return 1; }
+  git -C "$ROOT" show "HEAD:CHANGELOG.md" > "$TMPROOT/cl-new" 2> /dev/null || { echo "CHANGELOG.md: not in HEAD"; return 1; }
+  changelog_added "$TMPROOT/cl-old" "$TMPROOT/cl-new"
+}
 not_in() { printf '%s\n' "$1" | while IFS= read -r l; do [ -n "$l" ] || continue; printf '%s\n' "$2" | grep -qxF -- "$l" || printf '%s ' "$l"; done; }
 
 # section2 HEADING-ERE < FILE : the lines under a level-two heading, up to the next one.
@@ -270,7 +359,9 @@ rule_frozen() {
   fi
   git -C "$ROOT" rev-parse -q --verify "$BASE^{commit}" > /dev/null || { fail "frozen: BASE '$BASE' is not a commit of $ROOT"; return 2; }
   git -C "$ROOT" rev-parse -q --verify "$TIP^{commit}" > /dev/null || { fail "frozen: TIP '$TIP' is not a commit of $ROOT"; return 2; }
-  local rec f n sha drv bound moved got want held="" nb
+  local rec f n sha drv bound moved got want held="" nb reason
+  git -C "$ROOT" rev-parse -q --verify "$RECORD_AT^{commit}" > /dev/null || { fail "frozen: RECORD_AT '$RECORD_AT' is not a commit of $ROOT"; return 2; }
+  git -C "$ROOT" merge-base --is-ancestor "$RECORD_AT" HEAD || fail "frozen: RECORD_AT $RECORD_AT is not an ancestor of HEAD"
   for rec in $RECORDS; do
     f="$REC_ROOT/$rec"
     need "$f" || continue
@@ -289,10 +380,13 @@ rule_frozen() {
       moved=$(git -C "$ROOT" diff --name-only "$sha" HEAD -- $bound | tr '\n' ' ')
       fail "frozen: $rec: a bound file moved since the evidence commit $sha: $moved"
     fi
+    if ! reason=$(src_since "$sha"); then
+      fail "frozen: $rec: the source of the binary moved since the evidence commit $sha: $reason"
+    fi
     # shellcheck disable=SC2086
-    if ! git -C "$ROOT" diff --quiet "$sha" HEAD -- $BINARY_SRC; then
-      moved=$(git -C "$ROOT" diff --name-only "$sha" HEAD -- $BINARY_SRC | tr '\n' ' ')
-      fail "frozen: $rec: the source of the binary moved since the evidence commit $sha: $moved"
+    if ! git -C "$ROOT" diff --quiet "$sha" "$RECORD_AT" -- $BINARY_SRC; then
+      moved=$(git -C "$ROOT" diff --name-only "$sha" "$RECORD_AT" -- $BINARY_SRC | tr '\n' ' ')
+      fail "frozen: RECORD_AT $RECORD_AT does not hold the binary of the evidence commit $sha of $rec: $moved"
     fi
     nb=$(printf '%s\n' $bound | grep -c .)
     held="$held, ${rec#deploy/} at $sha ($nb bound files of $(basename "$drv"))"
@@ -302,7 +396,7 @@ rule_frozen() {
   if [ "$got" != "$want" ]; then
     fail "frozen: the files changed in $BASE...$TIP (TIP $TIP) are not the files of the phase; extra: $(not_in "$got" "$want")missing: $(not_in "$want" "$got")"
   fi
-  [ "$RULE_FAIL" = 0 ] && ok "frozen: the bound files and $BINARY_SRC unchanged since the evidence commit of each record (${held#, }), and $BASE...$TIP changed exactly the $(printf '%s\n' "$want" | grep -c .) files of the phase"
+  [ "$RULE_FAIL" = 0 ] && ok "frozen: the bound files unchanged and $BINARY_SRC unchanged but for new version sections of CHANGELOG.md since the evidence commit of each record (${held#, }), RECORD_AT $RECORD_AT holds each binary, and $BASE...$TIP changed exactly the $(printf '%s\n' "$want" | grep -c .) files of the phase"
 }
 
 rule_quotes() {
@@ -467,13 +561,13 @@ EOF_P
   [ "$RULE_FAIL" = 0 ] && ok "stable: $narea areas with a promise and a checklist, $nitems unchecked items that each name a source, $np documents named that exist, and the README links docs/stable.md"
 }
 
-# run_ok DESC PREFIX CMD... : run CMD in ROOT; its last line must begin with PREFIX. With
+# run_ok DESC PREFIX CMD... : run CMD in ROOT (in RUN_DIR when the call sets it); its last line must begin with PREFIX. With
 # RUN_NOSKIP=1 in the environment of the call, a last line that says a rule was skipped
 # fails too, because a driver that skipped its own record rule has proven less than asked.
 run_ok() {
   local desc="$1" want="$2" out last
   shift 2
-  out=$(cd "$ROOT" && "$@" 2>&1)
+  out=$(cd "${RUN_DIR:-$ROOT}" && "$@" 2>&1)
   last=$(printf '%s\n' "$out" | tail -n 1)
   case "$last" in
     "$want"*)
@@ -495,15 +589,51 @@ run_ok() {
   esac
 }
 
+# record_prove : what must hold before the drivers' record-checks run at RECORD_AT, because
+# the drivers there are the code of HEAD and RECORD_AT is HEAD but for new changelog sections.
+record_prove() {
+  local reason drv bound moved
+  git -C "$ROOT" rev-parse -q --verify "$RECORD_AT^{commit}" > /dev/null || { fail "record: RECORD_AT '$RECORD_AT' is not a commit of $ROOT"; return 2; }
+  git -C "$ROOT" merge-base --is-ancestor "$RECORD_AT" HEAD || { fail "record: RECORD_AT $RECORD_AT is not an ancestor of HEAD"; return 1; }
+  if ! reason=$(src_since "$RECORD_AT"); then
+    fail "record: the source of the binary moved since RECORD_AT $RECORD_AT: $reason"
+    return 1
+  fi
+  for drv in deploy/test/upgrade-verify.sh deploy/test/browser-verify.sh; do
+    bound=$(bound_of "$drv") || { fail "record: $drv has no single BOUND_FILES= line"; return 1; }
+    # shellcheck disable=SC2086
+    if ! git -C "$ROOT" diff --quiet "$RECORD_AT" HEAD -- $bound; then
+      # shellcheck disable=SC2086
+      moved=$(git -C "$ROOT" diff --name-only "$RECORD_AT" HEAD -- $bound | tr '\n' ' ')
+      fail "record: a bound file of $drv moved since RECORD_AT $RECORD_AT: $moved"
+      return 1
+    fi
+  done
+  return 0
+}
+
 rule_record() {
-  local missing="" rec has_sum=no has_uat=no
+  local missing="" rec has_sum=no has_uat=no rc
   [ -f "$E/amd64-t34-summary.txt" ] && has_sum=yes
   [ -d "$E/mac-t34-uat" ] && has_uat=yes
   if [ "$has_sum" = yes ] && [ "$has_uat" = yes ]; then
-    for rec in deploy/MIGRATION-RESTORE-RUN.md deploy/UPDATE-CHAIN-RUN.md deploy/ROLLBACK-RUN.md; do
-      run_ok "upgrade-verify.sh record-check of $rec" 'RECORD-CHECK OK (' env R="$REC_ROOT/$rec" E="$E" bash deploy/test/upgrade-verify.sh record-check
-    done
-    run_ok "browser-verify.sh record-check of deploy/BROWSER-RUN.md" 'RECORD-CHECK OK (' env R="$REC_ROOT/deploy/BROWSER-RUN.md" E="$E" bash deploy/test/browser-verify.sh record-check
+    record_prove
+    rc=$?
+    [ "$rc" = 2 ] && return 2
+    if [ "$rc" = 0 ]; then
+      WT="$TMPROOT/at"
+      if ! git -C "$ROOT" -c core.hooksPath=/dev/null worktree add --detach -q "$WT" "$RECORD_AT" > /dev/null 2>&1; then
+        WT=""
+        fail "record: git worktree add of RECORD_AT $RECORD_AT failed"
+        return 2
+      fi
+      for rec in deploy/MIGRATION-RESTORE-RUN.md deploy/UPDATE-CHAIN-RUN.md deploy/ROLLBACK-RUN.md; do
+        RUN_DIR="$WT" run_ok "upgrade-verify.sh record-check of $rec" 'RECORD-CHECK OK (' env R="$REC_ROOT/$rec" E="$E" bash deploy/test/upgrade-verify.sh record-check
+      done
+      RUN_DIR="$WT" run_ok "browser-verify.sh record-check of deploy/BROWSER-RUN.md" 'RECORD-CHECK OK (' env R="$REC_ROOT/deploy/BROWSER-RUN.md" E="$E" bash deploy/test/browser-verify.sh record-check
+      git -C "$ROOT" worktree remove --force "$WT" > /dev/null 2>&1
+      WT=""
+    fi
   elif [ "$has_sum" = yes ] || [ "$has_uat" = yes ]; then
     # Evidence that is partly there is not evidence that is missing: the half that is
     # there would go unchecked, and the gate would say nothing.
@@ -523,7 +653,7 @@ rule_record() {
     echo "SKIP record: no scratch files under$missing"
     return "$SKIP"
   fi
-  ok "record: the record-checks of the four records of phase 34 and the gate of phase 32 ended OK"
+  ok "record: the record-checks of the four records of phase 34 ran at RECORD_AT $RECORD_AT, which HEAD differs from at most by new version sections of CHANGELOG.md, and the gate of phase 32 ended OK"
 }
 
 # ------------------------------------------------------------- selftest ----
@@ -562,9 +692,38 @@ t_row_sub() {
     index($0, id) == 1 { i = index($0, o); if (i > 0) $0 = substr($0, 1, i - 1) n substr($0, i + ol) } { print }'
 }
 
+# t_commit DIR : commit every tracked change in DIR, as upgrade-verify.sh does.
+t_commit() {
+  git -C "$1" -c user.name=t34 -c user.email=t34@invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -am selftest
+}
+# t_cl_top VERSION DATE < FILE : a new section, directly above the first level-two heading.
+t_cl_top() {
+  V="$1" D="$2" awk 'BEGIN { v = ENVIRON["V"]; d = ENVIRON["D"] }
+    !done && /^## / { printf "## %s — %s\n\n### Neu\n\n- Ein Fall des Selbsttests.\n\n", v, d; done = 1 } { print }'
+}
+# t_cl_case DIR VERSION DATE [EDIT] : in the clone DIR, reset to HEADSHA, add the section
+# (when VERSION is not empty), then apply EDIT, a function that filters CHANGELOG.md from
+# stdin to stdout. The caller commits.
+t_cl_case() {
+  local dir="$1" ver="$2" dat="$3" edit="${4:-}"
+  git -C "$dir" -c core.hooksPath=/dev/null checkout -q -f --detach "$HEADSHA" || return 1
+  if [ -n "$ver" ]; then
+    t_cl_top "$ver" "$dat" < "$dir/CHANGELOG.md" > "$dir/CHANGELOG.md.new" && mv "$dir/CHANGELOG.md.new" "$dir/CHANGELOG.md"
+  fi
+  if [ -n "$edit" ]; then
+    "$edit" < "$dir/CHANGELOG.md" > "$dir/CHANGELOG.md.new" && mv "$dir/CHANGELOG.md.new" "$dir/CHANGELOG.md"
+  fi
+}
+t_e_date() { sed 's/^## 0\.1\.4 — 2026-11-12$/## 0.1.4 — 2026-11-13/'; }
+t_e_last() { sed '$d'; }
+t_e_end() { cat; printf '\n## 9.9.8 — 2099-01-01\n\n### Neu\n\n- Ein Fall des Selbsttests.\n'; }
+t_e_nohead() { awk '!done && /^## / { print "- Ein Satz ohne Version."; print ""; done = 1 } { print }'; }
+t_e_pre() { sed '1s/^# Changelog$/# Changes/'; }
+
 selftest() {
-  local T base tip rec less
+  local T base tip rec less wt0 c1 c2 tipsha side
   T=$(mktemp -d "$TMPROOT/st.XXXXXX")
+  wt0=$(git -C "$ROOT" worktree list | grep -c .)
   cp "$BETA" "$T/good.md"
   base=${BASE:-$(git -C "$ROOT" merge-base origin/main HEAD 2> /dev/null)}
   base=$(git -C "$ROOT" rev-parse -q --verify "$base^{commit}" 2> /dev/null)
@@ -578,6 +737,44 @@ selftest() {
   less=$(printf '%s\n' "$PHASE_FILES" | grep -vxF 'docs/beta.md')
   st_run 'frozen: the list of the phase without docs/beta.md' 1 'extra: docs/beta.md' "BASE=$base" "TIP=$tip" "PHASE_FILES=$less" -- frozen
   st_run 'frozen: no BASE' 2 'frozen: BASE is required' "BASE=" "TIP=$tip" -- frozen
+  st_run 'frozen: RECORD_AT is not a commit' 2 "frozen: RECORD_AT '0000000' is not a commit" "BASE=$base" "TIP=$tip" "RECORD_AT=0000000" -- frozen
+  st_run 'frozen: RECORD_AT is BASE, whose binary is not that of the evidence' 1 'does not hold the binary of the evidence commit' "BASE=$base" "TIP=$tip" "RECORD_AT=$base" -- frozen
+  # A scratch clone of ROOT, with one commit on top of HEAD per case. TIP is resolved here:
+  # inside the clone, HEAD is the case's commit and would make BASE...TIP list the case.
+  HEADSHA=$(git -C "$ROOT" rev-parse HEAD)
+  tipsha=$(git -C "$ROOT" rev-parse -q --verify "$tip^{commit}")
+  git -c core.hooksPath=/dev/null clone -q --shared --no-checkout "$ROOT" "$T/clone" 2> /dev/null
+  t_cl_case "$T/clone" 9.9.9 2099-01-01
+  t_commit "$T/clone"
+  st_run 'frozen: a commit that adds a new top section to CHANGELOG.md passes' 0 'ok: frozen' "ROOT=$T/clone" "BASE=$base" "TIP=$tipsha" -- frozen
+  t_cl_case "$T/clone" 9.9.9 2099-01-01
+  printf '// selftest\n' >> "$T/clone/changelog.go"
+  t_commit "$T/clone"
+  st_run 'frozen: a commit that also changes changelog.go fails' 1 'beyond CHANGELOG.md: changelog.go' "ROOT=$T/clone" "BASE=$base" "TIP=$tipsha" -- frozen
+  t_cl_case "$T/clone" 9.9.9 2099-01-01 t_e_date
+  t_commit "$T/clone"
+  st_run 'frozen: a commit that adds a section and edits an older line of CHANGELOG.md fails' 1 'an older line changed, moved or was removed' "ROOT=$T/clone" "BASE=$base" "TIP=$tipsha" -- frozen
+  t_cl_case "$T/clone" 9.9.9 2099-01-01 t_e_last
+  t_commit "$T/clone"
+  st_run 'frozen: a commit that adds a section and removes an older line of CHANGELOG.md fails' 1 'an older line changed, moved or was removed' "ROOT=$T/clone" "BASE=$base" "TIP=$tipsha" -- frozen
+  t_cl_case "$T/clone" "" "" t_e_end
+  t_commit "$T/clone"
+  st_run 'frozen: a commit that adds the section at the end of CHANGELOG.md fails' 1 'an older line changed, moved or was removed' "ROOT=$T/clone" "BASE=$base" "TIP=$tipsha" -- frozen
+  t_cl_case "$T/clone" "" "" t_e_nohead
+  t_commit "$T/clone"
+  st_run 'frozen: a commit whose added lines do not begin with a version heading fails' 1 'the added lines do not begin with a version heading' "ROOT=$T/clone" "BASE=$base" "TIP=$tipsha" -- frozen
+  t_cl_case "$T/clone" 9.9.9 2099-01-01 t_e_pre
+  t_commit "$T/clone"
+  st_run 'frozen: a commit that changes the preamble of CHANGELOG.md fails' 1 'a line above its first version heading changed' "ROOT=$T/clone" "BASE=$base" "TIP=$tipsha" -- frozen
+  t_cl_case "$T/clone" 0.1.4 2026-11-24
+  t_commit "$T/clone"
+  st_run 'frozen: a commit that adds a second section for an existing version fails' 1 'names a version an older heading already has' "ROOT=$T/clone" "BASE=$base" "TIP=$tipsha" -- frozen
+  t_cl_case "$T/clone" "" ""
+  printf 'selftest\n' >> "$T/clone/README.md"
+  t_commit "$T/clone"
+  side=$(git -C "$T/clone" rev-parse HEAD)
+  git -C "$T/clone" -c core.hooksPath=/dev/null checkout -q -f --detach "$HEADSHA"
+  st_run 'frozen: RECORD_AT on a side commit that is not an ancestor of HEAD fails' 1 'is not an ancestor of HEAD' "ROOT=$T/clone" "BASE=$base" "TIP=$tipsha" "RECORD_AT=$side" -- frozen
   # quotes
   st_run 'quotes: control, the page as it is' 0 'ok: quotes' "BETA=$T/good.md" -- quotes
   t_row_append P-27 'NO SUCH PHRASE 34' < "$T/good.md" > "$T/q-absent.md"
@@ -647,15 +844,34 @@ selftest() {
   st_run 'record: E holds mac-t34-uat and no amd64-t34-summary.txt, so the rule fails and is not skipped' 1 'holds only part of the evidence set (amd64-t34-summary.txt missing, mac-t34-uat present)' "E=$T/half-uat" "E32=$T/empty-e" -- record
   st_run 'record: E32 holds files of phase 32 and no amd64-t32-src, so the rule fails and is not skipped' 1 'holds only part of the evidence set of phase 32 (amd64-t32-src missing)' "E=$T/empty-e" "E32=$T/half-t32" -- record
   # The coupling to the gate of phase 32 reads its last line, not its rule count. The fake
-  # root has drivers that end OK, and a 32-check.sh that ends as FAKE_LAST says.
-  mkdir -p "$T/fake/deploy/test" "$T/full-e/mac-t34-uat" "$T/full-e32/amd64-t32-src"
+  # root is a git repository of two commits: c1 is RECORD_AT, c2 is HEAD and adds a section
+  # to CHANGELOG.md. Its drivers end OK only where HEAD is FAKE_AT, which is how the case
+  # proves that the record-checks run at RECORD_AT and not at HEAD. Its 32-check.sh ends as
+  # FAKE_LAST says.
+  mkdir -p "$T/fake/deploy/test" "$T/fake/internal" "$T/full-e/mac-t34-uat" "$T/full-e32/amd64-t32-src"
   : > "$T/full-e/amd64-t34-summary.txt"
-  printf '%s\n' '#!/bin/sh' 'echo "RECORD-CHECK OK (1 checks)"' > "$T/fake/deploy/test/upgrade-verify.sh"
-  cp "$T/fake/deploy/test/upgrade-verify.sh" "$T/fake/deploy/test/browser-verify.sh"
+  git init -q "$T/fake" 2> /dev/null
+  for rec in upgrade-verify browser-verify; do
+    printf '%s\n' '#!/bin/sh' "BOUND_FILES=\"deploy/test/$rec.sh\"" 'if [ "$(git rev-parse HEAD)" = "$FAKE_AT" ]; then echo "RECORD-CHECK OK (1 checks)"; else echo "RECORD-CHECK FAILED (HEAD is not FAKE_AT)"; fi' > "$T/fake/deploy/test/$rec.sh"
+  done
   printf '%s\n' '#!/bin/sh' 'echo "$FAKE_LAST"' > "$T/fake/deploy/test/32-check.sh"
-  st_run 'record: the gate of phase 32 ends with another number of rules, and the rule passes' 0 '34-CHECK OK (1 rules)' "ROOT=$T/fake" "E=$T/full-e" "E32=$T/full-e32" "FAKE_LAST=32-CHECK OK (4 rules)" -- record
-  st_run 'record: the gate of phase 32 skipped its own record rule, and the rule fails' 1 "record: 32-check.sh all after the merge of phase 32 skipped a rule" "ROOT=$T/fake" "E=$T/full-e" "E32=$T/full-e32" "FAKE_LAST=32-CHECK OK (4 rules, 1 skipped)" -- record
-  st_run 'record: the gate of phase 32 fails, and the rule fails' 1 "record: 32-check.sh all after the merge of phase 32 did not end '32-CHECK OK (…'" "ROOT=$T/fake" "E=$T/full-e" "E32=$T/full-e32" "FAKE_LAST=32-CHECK FAILED (1 of 5)" -- record
+  printf '%s\n' '# Changelog' '' '## 0.0.1 — 2026-01-01' '' '- Ein Punkt.' > "$T/fake/CHANGELOG.md"
+  printf '%s\n' 'package x' > "$T/fake/internal/x.go"
+  git -C "$T/fake" add deploy CHANGELOG.md internal
+  t_commit "$T/fake"
+  c1=$(git -C "$T/fake" rev-parse HEAD)
+  t_cl_top 0.0.2 2026-01-02 < "$T/fake/CHANGELOG.md" > "$T/fake/CHANGELOG.md.new" && mv "$T/fake/CHANGELOG.md.new" "$T/fake/CHANGELOG.md"
+  t_commit "$T/fake"
+  c2=$(git -C "$T/fake" rev-parse HEAD)
+  st_run 'record: the gate of phase 32 ends with another number of rules, and the rule passes' 0 '34-CHECK OK (1 rules)' "ROOT=$T/fake" "E=$T/full-e" "E32=$T/full-e32" "FAKE_LAST=32-CHECK OK (4 rules)" "RECORD_AT=$c1" "FAKE_AT=$c1" -- record
+  st_run 'record: the gate of phase 32 skipped its own record rule, and the rule fails' 1 "record: 32-check.sh all after the merge of phase 32 skipped a rule" "ROOT=$T/fake" "E=$T/full-e" "E32=$T/full-e32" "FAKE_LAST=32-CHECK OK (4 rules, 1 skipped)" "RECORD_AT=$c1" "FAKE_AT=$c1" -- record
+  st_run 'record: the gate of phase 32 fails, and the rule fails' 1 "record: 32-check.sh all after the merge of phase 32 did not end '32-CHECK OK (…'" "ROOT=$T/fake" "E=$T/full-e" "E32=$T/full-e32" "FAKE_LAST=32-CHECK FAILED (1 of 5)" "RECORD_AT=$c1" "FAKE_AT=$c1" -- record
+  st_run 'record: with RECORD_AT at HEAD the fake drivers see HEAD and fail' 1 'record: upgrade-verify.sh record-check of deploy/MIGRATION-RESTORE-RUN.md did not end' "ROOT=$T/fake" "E=$T/full-e" "E32=$T/full-e32" "FAKE_LAST=32-CHECK OK (5 rules)" "RECORD_AT=$c2" "FAKE_AT=$c1" -- record
+  printf '%s\n' 'package x // moved' > "$T/fake/internal/x.go"
+  t_commit "$T/fake"
+  st_run 'record: the source of the binary moved since RECORD_AT beyond CHANGELOG.md, and the rule fails' 1 'beyond CHANGELOG.md: internal/x.go' "ROOT=$T/fake" "E=$T/full-e" "E32=$T/full-e32" "FAKE_LAST=32-CHECK OK (5 rules)" "RECORD_AT=$c1" "FAKE_AT=$c1" -- record
+  if [ "$(git -C "$T/fake" worktree list | grep -c .)" = 1 ]; then st_pass 'record: no worktree is left behind in the fake root'; else st_bad 'record: no worktree is left behind in the fake root'; fi
+  if [ "$(git -C "$ROOT" worktree list | grep -c .)" = "$wt0" ]; then st_pass 'record: no worktree of ROOT is left behind'; else st_bad 'record: no worktree of ROOT is left behind'; fi
   if [ "$ST_K" = 0 ]; then
     echo "SELFTEST OK ($ST_N cases)"
     return 0
