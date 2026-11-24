@@ -40,7 +40,12 @@
 #           counted as skipped in the last line, never as passed.
 # all       frozen, quotes, ledger, deploy, record, in that order.
 # selftest  one negative case per rule, each beside a control that passes, on copies in a
-#           temporary directory; the real files are never written.
+#           temporary directory; the real files are never written. Run bare, it pins the
+#           bounds of phase 32 itself (BASE=e1116b3, TIP=93bfb80) for the frozen cases, so
+#           it passes on any checkout after the merge; with BASE set it uses BASE and TIP
+#           as given. Where e1116b3 and 93bfb80 are not in the clone (a shallow clone) the
+#           frozen cases that need them print `SKIP …`, count as neither passed nor failed,
+#           and the last line says `SELFTEST OK (N cases, S skipped)`.
 #
 # Why this file and not the archived gate. The gate of v0.1.1 is
 # .planning/milestones/v0.1.1-phases/28-the-promise-in-writing/28-check.sh. It stays as it
@@ -66,7 +71,8 @@
 #
 # The last line is `32-CHECK OK (N rules)`, with `, M skipped` added when the record rule
 # was skipped (a skipped rule is not among the N), or `32-CHECK FAILED (K of N)`; the
-# selftest ends `SELFTEST OK (N cases)` or `SELFTEST FAILED (K of N)`. Exit status: 0 every
+# selftest ends `SELFTEST OK (N cases)`, `SELFTEST OK (N cases, S skipped)` or
+# `SELFTEST FAILED (K of N)`. Exit status: 0 every
 # rule passed, 1 a rule failed, 2 usage or a rule could not run.
 #
 # bash 3.2 and BWK awk (macOS): no mapfile, no associative arrays, no gawk extensions.
@@ -310,6 +316,8 @@ rule_record() {
 
 ST_N=0
 ST_K=0
+ST_S=0
+st_skip() { ST_S=$((ST_S + 1)); echo "SKIP $1"; }
 st_pass() { ST_N=$((ST_N + 1)); echo "ok $ST_N $1"; }
 st_bad() { ST_N=$((ST_N + 1)); ST_K=$((ST_K + 1)); echo "FAIL $ST_N $1"; }
 # st_run DESC WANT-EXIT MESSAGE ENV... -- RULE : run this file on one rule with the
@@ -345,16 +353,53 @@ selftest() {
   T=$(mktemp -d "$TMPROOT/st.XXXXXX")
   cp "$BETA" "$T/good.md"
   cp "$DEPLOY_MD" "$T/deploy-good.md"
-  base=${BASE:-$(git -C "$ROOT" merge-base origin/main HEAD 2> /dev/null)}
+  # The files of phase 32 are BASE...TIP only for the pair that bounds phase 32. Merged
+  # into main, a later branch makes BASE...HEAD every later phase too, so the control
+  # would fail on every checkout after the merge. The selftest therefore pins the pair
+  # of phase 32 itself (the same one the header of this file names) when BASE is not
+  # given and both commits are here. Where they are not (a shallow clone), the cases
+  # that need them say SKIP: they are neither passed nor failed, and the last line says
+  # how many were skipped.
+  pin_base=e1116b3
+  pin_tip=93bfb80
+  pin_ok=0
+  if git -C "$ROOT" rev-parse -q --verify "$pin_base^{commit}" > /dev/null 2>&1 \
+    && git -C "$ROOT" rev-parse -q --verify "$pin_tip^{commit}" > /dev/null 2>&1; then
+    pin_ok=1
+  fi
+  control_ok=1
+  if [ -n "${BASE:-}" ]; then
+    base=$BASE
+    tip=${TIP:-HEAD}
+  elif [ "$pin_ok" = 1 ]; then
+    base=$pin_base
+    tip=$pin_tip
+  else
+    base=$(git -C "$ROOT" merge-base origin/main HEAD 2> /dev/null)
+    tip=${TIP:-HEAD}
+    control_ok=0
+  fi
   base=$(git -C "$ROOT" rev-parse -q --verify "$base^{commit}" 2> /dev/null)
-  tip=${TIP:-HEAD}
   # frozen
-  st_run 'frozen: control, the record as it is' 0 'ok: frozen' "BASE=$base" "TIP=$tip" "R=$R" -- frozen
-  sed "s/^Evidence commit: .*/Evidence commit: $base/" "$R" > "$T/r-base.md"
-  st_run 'frozen: the Evidence commit replaced by BASE' 1 'frozen: a bound file moved since the evidence commit' "BASE=$base" "TIP=$tip" "R=$T/r-base.md" -- frozen
+  if [ "$control_ok" = 1 ] && [ -n "$base" ]; then
+    st_run 'frozen: control, the record as it is' 0 'ok: frozen' "BASE=$base" "TIP=$tip" "R=$R" -- frozen
+  else
+    st_skip "frozen: control, the record as it is: no BASE given and $pin_base, $pin_tip (the bounds of phase 32) are not in this clone"
+  fi
+  if [ -n "$base" ]; then
+    sed "s/^Evidence commit: .*/Evidence commit: $base/" "$R" > "$T/r-base.md"
+    st_run 'frozen: the Evidence commit replaced by BASE' 1 'frozen: a bound file moved since the evidence commit' "BASE=$base" "TIP=$tip" "R=$T/r-base.md" -- frozen
+  else
+    st_skip 'frozen: the Evidence commit replaced by BASE: no base commit can be found in this clone'
+  fi
   st_run 'frozen: no BASE' 2 'frozen: BASE is required' "BASE=" "TIP=$tip" "R=$R" -- frozen
-  st_run 'frozen: after the merge, phase 32 compared on its own merge (BASE=e1116b3 TIP=93bfb80)' 0 'e1116b3...93bfb80 changed exactly the 24 files of the phase' "BASE=e1116b3" "TIP=93bfb80" "R=$R" -- frozen
-  st_run 'frozen: TIP unset compares against HEAD, and says so' 1 'the files changed in e1116b3...HEAD (TIP HEAD) are not the files of the phase' "BASE=e1116b3" "TIP=" "R=$R" -- frozen
+  if [ "$pin_ok" = 1 ]; then
+    st_run 'frozen: after the merge, phase 32 compared on its own merge (BASE=e1116b3 TIP=93bfb80)' 0 'e1116b3...93bfb80 changed exactly the 24 files of the phase' "BASE=e1116b3" "TIP=93bfb80" "R=$R" -- frozen
+    st_run 'frozen: TIP unset compares against HEAD, and says so' 1 'the files changed in e1116b3...HEAD (TIP HEAD) are not the files of the phase' "BASE=e1116b3" "TIP=" "R=$R" -- frozen
+  else
+    st_skip 'frozen: after the merge, phase 32 compared on its own merge (BASE=e1116b3 TIP=93bfb80): the commits are not in this clone'
+    st_skip 'frozen: TIP unset compares against HEAD, and says so: e1116b3 is not in this clone'
+  fi
   # quotes
   st_run 'quotes: control, the page as it is' 0 'ok: quotes' "BETA=$T/good.md" "R=$R" -- quotes
   t_row_append P-23 'NO SUCH PHRASE 32' < "$T/good.md" > "$T/q-absent.md"
@@ -380,7 +425,7 @@ selftest() {
   st_run 'record: E is an empty directory, so the rule is skipped and not passed' 0 'SKIP record: no scratch files under E' "E=$T/empty-e" "R=$R" -- record
   st_run 'record: a skipped rule is counted as skipped in the last line' 0 '32-CHECK OK (0 rules, 1 skipped)' "E=$T/empty-e" "R=$R" -- record
   if [ "$ST_K" = 0 ]; then
-    echo "SELFTEST OK ($ST_N cases)"
+    if [ "$ST_S" = 0 ]; then echo "SELFTEST OK ($ST_N cases)"; else echo "SELFTEST OK ($ST_N cases, $ST_S skipped)"; fi
     return 0
   fi
   echo "SELFTEST FAILED ($ST_K of $ST_N)"
