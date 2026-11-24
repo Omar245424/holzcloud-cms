@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -88,10 +89,32 @@ func RunMigrations(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	return applyMigrations(provider)
+}
+
+// applyMigrations applies what provider has pending and logs one "migration
+// applied" line per file it applied, also when a later file fails.
+//
+// Each SQL migration runs in a transaction of its own, so when a later file
+// fails, goose returns a *goose.PartialError and the earlier files of the same
+// run stay committed. Without their lines the journal of a failed update named
+// only the failure (phase 34, F-2), and the operator could not read the level
+// the database was left at from it. It takes the provider so a test can hand
+// it migrations of its own.
+func applyMigrations(provider *goose.Provider) error {
 	results, err := provider.Up(context.Background())
 	if err != nil {
+		var partial *goose.PartialError
+		if errors.As(err, &partial) {
+			logApplied(partial.Applied)
+		}
 		return fmt.Errorf("goose up: %w", err)
 	}
+	logApplied(results)
+	return nil
+}
+
+func logApplied(results []*goose.MigrationResult) {
 	for _, r := range results {
 		slog.Info("migration applied",
 			"version", r.Source.Version,
@@ -99,7 +122,6 @@ func RunMigrations(db *sql.DB) error {
 			"duration_ms", r.Duration.Milliseconds(),
 		)
 	}
-	return nil
 }
 
 func (d *DB) Close() {

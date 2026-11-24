@@ -110,6 +110,7 @@ Caddyfile for automatic HTTPS and a WAL-safe backup script are in
 
 - [Deploying](deploy/DEPLOY.md): systemd, Caddy, backups, single sign-on
 - [Beta criteria](docs/beta.md): what 0.1.x promises and what it does not
+- [What 1.0 will promise](docs/stable.md): the template contract, data, migrations, updates and platforms, and what is still missing
 - [Configuration](docs/configuration.md): every environment variable, e-mail
 - [Content model](docs/content-model.md): fields, content kinds, block kinds
 - [Publishing](docs/publishing.md): pages, menus, media, templates, design, SEO, plugins

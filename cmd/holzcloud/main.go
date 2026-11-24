@@ -12,7 +12,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -755,14 +757,70 @@ func openDatabase(cfg config.Config) (*db.DB, error) {
 	if err := db.RunMigrations(database.Write); err != nil {
 		slog.Error("migrations failed", "err", err)
 		if preUpgradeSnapshot != "" {
-			slog.Error("restore with: systemctl stop holzcloud && cp " +
-				preUpgradeSnapshot + " " + cfg.DBPath + " && systemctl start holzcloud")
+			slog.Error("restore with: " + restoreCommand(preUpgradeSnapshot, cfg.DBPath))
 		}
 		database.Close()
 		return nil, err
 	}
+	forgetPreUpgradeSnapshot(cfg)
 	return database, nil
 }
+
+// restoreCommand is the command the "restore with:" line hands an operator,
+// who pastes it as root: snapshot copied over the live database between a
+// stop and a start. Both paths go through shellWord, so a path that is not
+// plain reaches cp as one word and runs nothing.
+func restoreCommand(snapshot, dbPath string) string {
+	return "systemctl stop holzcloud && cp " + shellWord(snapshot) + " " + shellWord(dbPath) +
+		" && systemctl start holzcloud"
+}
+
+// plainShellWord is a word no POSIX shell splits, expands or treats as an
+// operator.
+var plainShellWord = regexp.MustCompile(`^[A-Za-z0-9_./+:,-]+$`)
+
+// shellWord returns s as one word of a shell line: bare when it is plain, so
+// the usual paths read as they always did, otherwise in single quotes with
+// every single quote in it closed, escaped and reopened.
+func shellWord(s string) string {
+	if plainShellWord.MatchString(s) {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// preUpgradeSnapshotStamp is the layout of the time in a snapshot's name.
+const preUpgradeSnapshotStamp = "20060102-150405"
+
+// preUpgradeSnapshotName is the base name of the snapshot written before an
+// update: the build's version and the time, to the second.
+func preUpgradeSnapshotName(version string, at time.Time) string {
+	return fmt.Sprintf("pre-upgrade-%s-%s.sqlite", version, at.UTC().Format(preUpgradeSnapshotStamp))
+}
+
+// preUpgradeSnapshotNameRE is the shape preUpgradeSnapshotName gives a name
+// with a version as git describe writes it (letters, digits and ._+-) and its
+// stamp. It is all the marker accepts: the name ends up in the "restore with:"
+// line, and a holzcloud-writable file whose name carries shell syntax must not
+// get there. A build stamped with any other version writes snapshots the
+// marker does not trust, so each of its restarts writes a fresh one, as
+// before the marker existed.
+var preUpgradeSnapshotNameRE = regexp.MustCompile(`^pre-upgrade-[0-9A-Za-z._+-]+-[0-9]{8}-[0-9]{6}\.sqlite$`)
+
+// preUpgradeMarker is the file in the data directory that names the snapshot
+// of a migration that has started and not finished: one line, the snapshot's
+// base name and the migration level it holds. It does not match
+// pre-upgrade-*.sqlite, so the pruning and the operator's listing of
+// snapshots never take it for one.
+const preUpgradeMarker = "pre-upgrade.pending"
+
+// schemaLevel and writeMarker are what snapshotBeforeMigrating reads the level
+// with and writes the marker with; variables only so a test can make either
+// fail, which a real data directory does under a busy lock or a full disk.
+var (
+	schemaLevel = db.CurrentVersion
+	writeMarker = writePreUpgradeMarker
+)
 
 // snapshotBeforeMigrating writes the pre-upgrade snapshot into the data
 // directory when migrations are pending, keeps the newest five, and returns
@@ -770,6 +828,25 @@ func openDatabase(cfg config.Config) (*db.DB, error) {
 // logged). The service and every subcommand that opens the database call it
 // before they migrate, so the way back that NewerSchemaError names exists
 // whichever of them first meets a database below its level.
+//
+// Beside the snapshot it writes preUpgradeMarker, and a migration that runs
+// through removes it again (forgetPreUpgradeSnapshot). The marker exists for
+// the restart loop: each SQL migration commits in its own transaction, so a
+// failing update leaves the database above the snapshot's level, the service
+// exits, and Restart=on-failure starts it again. Without the marker every such
+// start wrote another snapshot, of the half-migrated database, and pruned to
+// five: the newest snapshot and every later "restore with:" line named a copy
+// the previous binary refuses, and a second start loop pruned the one good
+// snapshot away (phase 34, F-1). With it, a start that finds the database
+// above the marked snapshot's level writes nothing, prunes nothing and cites
+// the marked snapshot.
+//
+// A database at or below the marked level is snapshotted again: it may have
+// been rolled back to that snapshot and written to since, and the old file
+// lacks those writes. The marker does not carry the binary's version: a fixed
+// build that meets the database a failed build left half-migrated still needs
+// the state from before the failed attempt, which is the state an older binary
+// can run.
 func snapshotBeforeMigrating(cfg config.Config, database *db.DB) (string, error) {
 	pending, err := db.HasPendingMigrations(database.Write)
 	if err != nil {
@@ -777,19 +854,148 @@ func snapshotBeforeMigrating(cfg config.Config, database *db.DB) (string, error)
 		return "", nil
 	}
 	if !pending {
+		// The database stands at this binary's level, so whatever attempt
+		// left a marker behind is over.
+		forgetPreUpgradeSnapshot(cfg)
 		return "", nil
 	}
-	name := fmt.Sprintf("pre-upgrade-%s-%s.sqlite", Version, time.Now().UTC().Format("20060102-150405"))
+	level, levelErr := schemaLevel(database.Write)
+	if levelErr != nil {
+		slog.Warn("cannot read the schema level before the snapshot", "err", levelErr)
+	} else if kept, keptLevel, ok := pendingPreUpgradeSnapshot(cfg.DataDir); ok && level > keptLevel {
+		slog.Warn("pre-upgrade snapshot kept",
+			"path", kept, "level", keptLevel, "db_level", level,
+			"reason", "an earlier start of this update applied part of its migrations and did not finish; "+
+				"the snapshot from before it stays the way back, so no snapshot of the half-migrated database is written")
+		return kept, nil
+	}
+
+	name := preUpgradeSnapshotName(Version, time.Now())
 	snapshot, err := db.Backup(context.Background(), database, filepath.Join(cfg.DataDir, name))
 	if err != nil {
 		slog.Error("cannot snapshot before migrating", "err", err)
 		return "", err
 	}
-	slog.Info("pre-upgrade snapshot written", "path", snapshot)
+	// A snapshot without a marker of its own ends any older marker: one may
+	// have survived a rollback to a binary before 0.1.5, and if this attempt
+	// then fails part-way, a restart would find the database above that
+	// marker's level and cite its snapshot, which lacks everything written
+	// since. Without a marker each restart writes a fresh snapshot instead,
+	// as before the marker existed.
+	if levelErr != nil {
+		slog.Info("pre-upgrade snapshot written", "path", snapshot)
+		dropOlderPreUpgradeMarker(cfg, snapshot)
+	} else {
+		slog.Info("pre-upgrade snapshot written", "path", snapshot, "level", level)
+		// A marker that cannot be written is no reason to stop: the snapshot
+		// itself is the way back for this attempt, and only a restart after
+		// a failure would write another one.
+		if err := writeMarker(cfg.DataDir, filepath.Base(snapshot), level); err != nil {
+			slog.Warn("cannot write the pre-upgrade marker", "path", filepath.Join(cfg.DataDir, preUpgradeMarker), "err", err)
+			dropOlderPreUpgradeMarker(cfg, snapshot)
+		}
+	}
 	if err := db.PruneSnapshots(cfg.DataDir, 5, snapshot); err != nil {
 		slog.Warn("cannot prune old snapshots", "err", err)
 	}
 	return snapshot, nil
+}
+
+// pendingPreUpgradeSnapshot reads preUpgradeMarker and returns the path of the
+// snapshot it names and that snapshot's level. ok is false when there is no
+// marker or it is not one to trust: the name ends up in the "restore with:"
+// line an operator pastes as root, so it must be a bare name of exactly the
+// shape the binary writes (preUpgradeSnapshotNameRE, no shell syntax), of a
+// regular file in the data directory, and the level a number.
+func pendingPreUpgradeSnapshot(dataDir string) (path string, level int64, ok bool) {
+	markerPath := filepath.Join(dataDir, preUpgradeMarker)
+	data, err := os.ReadFile(markerPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", 0, false
+	}
+	ignore := func(reason string) (string, int64, bool) {
+		slog.Warn("ignoring the pre-upgrade marker", "path", markerPath, "reason", reason)
+		return "", 0, false
+	}
+	if err != nil {
+		return ignore(err.Error())
+	}
+	line := strings.TrimSpace(string(data))
+	fields := strings.Fields(line)
+	if strings.ContainsAny(line, "\r\n") || len(fields) != 2 {
+		return ignore("not one line of a snapshot name and a level")
+	}
+	name := fields[0]
+	if strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") || filepath.Base(name) != name {
+		return ignore("the snapshot name is not a bare file name")
+	}
+	if !preUpgradeSnapshotNameRE.MatchString(name) {
+		return ignore("the name is not that of a pre-upgrade snapshot")
+	}
+	level, err = strconv.ParseInt(fields[1], 10, 64)
+	if err != nil || level < 0 {
+		return ignore("the level is not a number")
+	}
+	path = filepath.Join(dataDir, name)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return ignore("the snapshot it names is not a file in the data directory")
+	}
+	return path, level, true
+}
+
+// writePreUpgradeMarker writes preUpgradeMarker atomically, mode 0600: a
+// temporary file in the data directory, renamed over the marker, so a start
+// never reads half a line.
+func writePreUpgradeMarker(dataDir, snapshotName string, level int64) error {
+	tmp, err := os.CreateTemp(dataDir, "."+preUpgradeMarker+"-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := fmt.Fprintf(tmp, "%s %d\n", snapshotName, level); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), filepath.Join(dataDir, preUpgradeMarker))
+}
+
+// forgetPreUpgradeSnapshot removes preUpgradeMarker after a migration that ran
+// through, or a start that found nothing pending: the attempt the marker
+// belongs to is over, and the next update writes a snapshot of its own instead
+// of citing one that lacks everything written since. The snapshot itself
+// stays, under the usual pruning.
+func forgetPreUpgradeSnapshot(cfg config.Config) {
+	markerPath := filepath.Join(cfg.DataDir, preUpgradeMarker)
+	err := os.Remove(markerPath)
+	switch {
+	case err == nil:
+		slog.Info("pre-upgrade marker removed: the database stands at this binary's level", "path", markerPath)
+	case !errors.Is(err, os.ErrNotExist):
+		slog.Warn("cannot remove the pre-upgrade marker", "path", markerPath, "err", err)
+	}
+}
+
+// dropOlderPreUpgradeMarker removes preUpgradeMarker when snapshot was written
+// and no marker naming it could be: whatever marker is there names an older
+// snapshot, and it must not be cited for this attempt.
+func dropOlderPreUpgradeMarker(cfg config.Config, snapshot string) {
+	markerPath := filepath.Join(cfg.DataDir, preUpgradeMarker)
+	err := os.Remove(markerPath)
+	switch {
+	case err == nil:
+		slog.Warn("pre-upgrade marker removed: it names an older snapshot than the one just written",
+			"path", markerPath, "snapshot", snapshot)
+	case !errors.Is(err, os.ErrNotExist):
+		slog.Warn("cannot remove the pre-upgrade marker", "path", markerPath, "err", err)
+	}
 }
 
 // pluginSettings answers a plugin that may read a website's settings. Handed in

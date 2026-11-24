@@ -7,16 +7,26 @@
 #
 # frozen    the evidence still holds: the SHA of the single `Evidence commit:` line of the
 #           record is a commit, the bound files of the set (BOUND below) and the source of
-#           the binary (cmd, internal, go.mod, go.sum) are unchanged between it and HEAD,
-#           and the files the phase changed (BASE...HEAD) are exactly the list of
-#           PHASE_FILES. BASE is required; the rule refuses to run without it.
+#           the binary (cmd, internal, go.mod, go.sum, changelog.go, CHANGELOG.md) are
+#           unchanged between it and HEAD, and the files the phase changed (BASE...TIP) are
+#           exactly the list of PHASE_FILES. BASE is required; the rule refuses to run
+#           without it. TIP is HEAD unless set, so on the branch of phase 32 the rule is
+#           what it was. After the merge, BASE...HEAD lists every later phase too, so the
+#           rule runs with TIP set to the merge of phase 32:
+#             BASE=e1116b3 TIP=93bfb80 bash deploy/test/32-check.sh all
+#           (93bfb80 merged pull request 88, the branch of phase 32, onto e1116b3). TIP only
+#           moves the list of the phase's files; the bound files and the binary's source
+#           are always compared with HEAD.
 # quotes    every required row of docs/beta.md (REQUIRED_ROWS) exists once, names
 #           deploy/BACKUP-VERIFY-RUN.md in its Record column, and every phrase of its
 #           Cited words column is found in the record by grep -F, byte for byte. A phrase
 #           is a sentence between straight double quotes or a backticked token outside
 #           them. A phrase that spans a line break of the record, or that holds a
 #           backtick and is cited as a backticked token, is not found, and the rule fails.
-#           The same holds for every sentence quoted by a limit marked (0.1.5).
+#           The same holds for every sentence quoted by a limit marked (0.1.5) that names
+#           `Record: deploy/BACKUP-VERIFY-RUN.md`, and at least six such limits must be
+#           there. A limit marked (0.1.5) that names another record of 0.1.5 is checked by
+#           deploy/test/34-check.sh, the gate of phase 34, and not here.
 # ledger    the three limits that 0.1.5 answers are quoted in the first column of the
 #           ledger table of 0.1.5 (header `| 0.1.1 said | 0.1.5 says | Promise rows |`),
 #           each of those rows names promise rows that exist, and no bullet of the section
@@ -30,7 +40,12 @@
 #           counted as skipped in the last line, never as passed.
 # all       frozen, quotes, ledger, deploy, record, in that order.
 # selftest  one negative case per rule, each beside a control that passes, on copies in a
-#           temporary directory; the real files are never written.
+#           temporary directory; the real files are never written. Run bare, it pins the
+#           bounds of phase 32 itself (BASE=e1116b3, TIP=93bfb80) for the frozen cases, so
+#           it passes on any checkout after the merge; with BASE set it uses BASE and TIP
+#           as given. Where e1116b3 and 93bfb80 are not in the clone (a shallow clone) the
+#           frozen cases that need them print `SKIP …`, count as neither passed nor failed,
+#           and the last line says `SELFTEST OK (N cases, S skipped)`.
 #
 # Why this file and not the archived gate. The gate of v0.1.1 is
 # .planning/milestones/v0.1.1-phases/28-the-promise-in-writing/28-check.sh. It stays as it
@@ -46,7 +61,9 @@
 #         of this file runs as `git -C "$ROOT"`, so the gate works from a worktree and from
 #         a copy of the file elsewhere.
 #   BASE  the commit the phase branched from (frozen only), for example
-#         BASE=$(git merge-base origin/main HEAD)
+#         BASE=$(git merge-base origin/main HEAD); after the merge, e1116b3
+#   TIP   the end of the phase's change (frozen only); default HEAD. After the merge of
+#         phase 32, 93bfb80, its merge commit
 #   R     the record; default $ROOT/deploy/BACKUP-VERIFY-RUN.md
 #   BETA  the page of promises; default $ROOT/docs/beta.md
 #   DEPLOY_MD  the deployment document; default $ROOT/deploy/DEPLOY.md
@@ -54,7 +71,8 @@
 #
 # The last line is `32-CHECK OK (N rules)`, with `, M skipped` added when the record rule
 # was skipped (a skipped rule is not among the N), or `32-CHECK FAILED (K of N)`; the
-# selftest ends `SELFTEST OK (N cases)` or `SELFTEST FAILED (K of N)`. Exit status: 0 every
+# selftest ends `SELFTEST OK (N cases)`, `SELFTEST OK (N cases, S skipped)` or
+# `SELFTEST FAILED (K of N)`. Exit status: 0 every
 # rule passed, 1 a rule failed, 2 usage or a rule could not run.
 #
 # bash 3.2 and BWK awk (macOS): no mapfile, no associative arrays, no gawk extensions.
@@ -71,18 +89,21 @@ BETA=${BETA:-$ROOT/docs/beta.md}
 DEPLOY_MD=${DEPLOY_MD:-$ROOT/deploy/DEPLOY.md}
 E=${E:-$ROOT/deploy/test/out}
 BASE=${BASE:-}
+TIP=${TIP:-HEAD}
 REC_NAME=deploy/BACKUP-VERIFY-RUN.md
 
 # The rows of docs/beta.md that must exist and cite the record.
 REQUIRED_ROWS="P-23 P-24 P-25 P-26 E-7 E-8"
+# The limits marked (0.1.5) that name the record: at least this many.
+MIN_LIMITS=6
 
 # The bound files of the evidence set, as the record names them, and the source of the
 # binary under test.
 BOUND="deploy/backup.sh deploy/restore.sh deploy/DEPLOY.md deploy/holzcloud-backup.service deploy/holzcloud-backup.timer deploy/test/run.sh deploy/test/Dockerfile deploy/test/backup-verify.sh"
-BINARY_SRC="cmd internal go.mod go.sum"
+BINARY_SRC="cmd internal go.mod go.sum changelog.go CHANGELOG.md"
 
 # Every file phase 32 changed, sorted as `sort` prints them under LC_ALL=C. The frozen rule
-# compares the real change BASE...HEAD with it, name for name.
+# compares the real change BASE...TIP with it, name for name.
 PHASE_FILES="cmd/holzcloud/check_files_test.go
 cmd/holzcloud/cli.go
 cmd/holzcloud/deploy_docs_test.go
@@ -176,6 +197,7 @@ rule_frozen() {
     return 2
   fi
   git -C "$ROOT" rev-parse -q --verify "$BASE^{commit}" > /dev/null || { fail "frozen: BASE '$BASE' is not a commit of $ROOT"; return 2; }
+  git -C "$ROOT" rev-parse -q --verify "$TIP^{commit}" > /dev/null || { fail "frozen: TIP '$TIP' is not a commit of $ROOT"; return 2; }
   local n sha got want moved
   n=$(grep -c '^Evidence commit: ' "$R")
   [ "$n" = 1 ] || { fail "frozen: $REC_NAME has $n 'Evidence commit:' lines, want exactly one"; return 1; }
@@ -194,12 +216,12 @@ rule_frozen() {
     moved=$(git -C "$ROOT" diff --name-only "$sha" HEAD -- $BINARY_SRC | tr '\n' ' ')
     fail "frozen: the source of the binary moved since the evidence commit $sha: $moved"
   fi
-  got=$(git -C "$ROOT" diff --name-only "$BASE...HEAD" | sort)
+  got=$(git -C "$ROOT" diff --name-only "$BASE...$TIP" | sort)
   want=$(printf '%s\n' "$PHASE_FILES" | sort)
   if [ "$got" != "$want" ]; then
-    fail "frozen: the files changed in $BASE...HEAD are not the files of the phase; extra: $(not_in "$got" "$want")missing: $(not_in "$want" "$got")"
+    fail "frozen: the files changed in $BASE...$TIP (TIP $TIP) are not the files of the phase; extra: $(not_in "$got" "$want")missing: $(not_in "$want" "$got")"
   fi
-  [ "$RULE_FAIL" = 0 ] && ok "frozen: the 8 bound files and $BINARY_SRC unchanged since $sha, and $BASE...HEAD changed exactly the $(printf '%s\n' "$want" | grep -c .) files of the phase"
+  [ "$RULE_FAIL" = 0 ] && ok "frozen: the 8 bound files and $BINARY_SRC unchanged since $sha, and $BASE...$TIP changed exactly the $(printf '%s\n' "$want" | grep -c .) files of the phase"
 }
 
 rule_quotes() {
@@ -223,9 +245,11 @@ rule_quotes() {
     done < <(phrases_of "$cited")
     [ "$n" -gt 0 ] || fail "quotes: $id: no cited words"
   done
+  # Only the limits that name this record; those of the other records of 0.1.5 are the
+  # business of deploy/test/34-check.sh.
   while IFS= read -r b; do
+    printf '%s\n' "$b" | grep -qF "Record: $REC_NAME" || continue
     nl=$((nl + 1))
-    printf '%s\n' "$b" | grep -qF "Record: $REC_NAME" || fail "quotes: a limit marked (0.1.5) names no 'Record: $REC_NAME': $(short "$b")"
     if ! quotes_of "$b" > /dev/null; then fail "quotes: the double quotes of a limit marked (0.1.5) do not pair up: $(short "$b")"; continue; fi
     n=0
     while IFS= read -r p; do
@@ -235,6 +259,7 @@ rule_quotes() {
     done < <(quotes_of "$b")
     [ "$n" -gt 0 ] || fail "quotes: a limit marked (0.1.5) quotes nothing: $(short "$b")"
   done < <(grep '^- (0\.1\.5) ' "$BETA")
+  [ "$nl" -ge "$MIN_LIMITS" ] || fail "quotes: $nl limits marked (0.1.5) name Record: $REC_NAME, want at least $MIN_LIMITS"
   [ "$RULE_FAIL" = 0 ] && ok "quotes: $nr rows ($REQUIRED_ROWS) and $nl limits marked (0.1.5) cite $REC_NAME, $np phrases found byte for byte"
 }
 
@@ -291,6 +316,8 @@ rule_record() {
 
 ST_N=0
 ST_K=0
+ST_S=0
+st_skip() { ST_S=$((ST_S + 1)); echo "SKIP $1"; }
 st_pass() { ST_N=$((ST_N + 1)); echo "ok $ST_N $1"; }
 st_bad() { ST_N=$((ST_N + 1)); ST_K=$((ST_K + 1)); echo "FAIL $ST_N $1"; }
 # st_run DESC WANT-EXIT MESSAGE ENV... -- RULE : run this file on one rule with the
@@ -318,19 +345,61 @@ t_row_drop() { ID="$1" awk 'BEGIN { id = "| " ENVIRON["ID"] " |" } index($0, id)
 t_sub() { O="$1" N="$2" awk 'BEGIN { o = ENVIRON["O"]; n = ENVIRON["N"]; ol = length(o) } { i = index($0, o); if (i > 0) $0 = substr($0, 1, i - 1) n substr($0, i + ol); print }'; }
 # t_after LINE NEW < FILE : NEW inserted after the line that begins with LINE.
 t_after() { O="$1" N="$2" awk 'BEGIN { o = ENVIRON["O"]; n = ENVIRON["N"] } { print } index($0, o) == 1 { print n }'; }
+# t_drop_line LINE < FILE : the file without the lines that begin with LINE.
+t_drop_line() { O="$1" awk 'BEGIN { o = ENVIRON["O"] } index($0, o) != 1 { print }'; }
 
 selftest() {
-  local T base
+  local T base tip
   T=$(mktemp -d "$TMPROOT/st.XXXXXX")
   cp "$BETA" "$T/good.md"
   cp "$DEPLOY_MD" "$T/deploy-good.md"
-  base=${BASE:-$(git -C "$ROOT" merge-base origin/main HEAD 2> /dev/null)}
+  # The files of phase 32 are BASE...TIP only for the pair that bounds phase 32. Merged
+  # into main, a later branch makes BASE...HEAD every later phase too, so the control
+  # would fail on every checkout after the merge. The selftest therefore pins the pair
+  # of phase 32 itself (the same one the header of this file names) when BASE is not
+  # given and both commits are here. Where they are not (a shallow clone), the cases
+  # that need them say SKIP: they are neither passed nor failed, and the last line says
+  # how many were skipped.
+  pin_base=e1116b3
+  pin_tip=93bfb80
+  pin_ok=0
+  if git -C "$ROOT" rev-parse -q --verify "$pin_base^{commit}" > /dev/null 2>&1 \
+    && git -C "$ROOT" rev-parse -q --verify "$pin_tip^{commit}" > /dev/null 2>&1; then
+    pin_ok=1
+  fi
+  control_ok=1
+  if [ -n "${BASE:-}" ]; then
+    base=$BASE
+    tip=${TIP:-HEAD}
+  elif [ "$pin_ok" = 1 ]; then
+    base=$pin_base
+    tip=$pin_tip
+  else
+    base=$(git -C "$ROOT" merge-base origin/main HEAD 2> /dev/null)
+    tip=${TIP:-HEAD}
+    control_ok=0
+  fi
   base=$(git -C "$ROOT" rev-parse -q --verify "$base^{commit}" 2> /dev/null)
   # frozen
-  st_run 'frozen: control, the record as it is' 0 'ok: frozen' "BASE=$base" "R=$R" -- frozen
-  sed "s/^Evidence commit: .*/Evidence commit: $base/" "$R" > "$T/r-base.md"
-  st_run 'frozen: the Evidence commit replaced by BASE' 1 'frozen: a bound file moved since the evidence commit' "BASE=$base" "R=$T/r-base.md" -- frozen
-  st_run 'frozen: no BASE' 2 'frozen: BASE is required' "BASE=" "R=$R" -- frozen
+  if [ "$control_ok" = 1 ] && [ -n "$base" ]; then
+    st_run 'frozen: control, the record as it is' 0 'ok: frozen' "BASE=$base" "TIP=$tip" "R=$R" -- frozen
+  else
+    st_skip "frozen: control, the record as it is: no BASE given and $pin_base, $pin_tip (the bounds of phase 32) are not in this clone"
+  fi
+  if [ -n "$base" ]; then
+    sed "s/^Evidence commit: .*/Evidence commit: $base/" "$R" > "$T/r-base.md"
+    st_run 'frozen: the Evidence commit replaced by BASE' 1 'frozen: a bound file moved since the evidence commit' "BASE=$base" "TIP=$tip" "R=$T/r-base.md" -- frozen
+  else
+    st_skip 'frozen: the Evidence commit replaced by BASE: no base commit can be found in this clone'
+  fi
+  st_run 'frozen: no BASE' 2 'frozen: BASE is required' "BASE=" "TIP=$tip" "R=$R" -- frozen
+  if [ "$pin_ok" = 1 ]; then
+    st_run 'frozen: after the merge, phase 32 compared on its own merge (BASE=e1116b3 TIP=93bfb80)' 0 'e1116b3...93bfb80 changed exactly the 24 files of the phase' "BASE=e1116b3" "TIP=93bfb80" "R=$R" -- frozen
+    st_run 'frozen: TIP unset compares against HEAD, and says so' 1 'the files changed in e1116b3...HEAD (TIP HEAD) are not the files of the phase' "BASE=e1116b3" "TIP=" "R=$R" -- frozen
+  else
+    st_skip 'frozen: after the merge, phase 32 compared on its own merge (BASE=e1116b3 TIP=93bfb80): the commits are not in this clone'
+    st_skip 'frozen: TIP unset compares against HEAD, and says so: e1116b3 is not in this clone'
+  fi
   # quotes
   st_run 'quotes: control, the page as it is' 0 'ok: quotes' "BETA=$T/good.md" "R=$R" -- quotes
   t_row_append P-23 'NO SUCH PHRASE 32' < "$T/good.md" > "$T/q-absent.md"
@@ -339,6 +408,10 @@ selftest() {
   st_run 'quotes: P-23 is gone' 1 'P-23: 0 rows' "BETA=$T/q-gone.md" "R=$R" -- quotes
   t_sub '"Real bit rot on a disk was not played' '"Real bit rot on a disk was played' < "$T/good.md" > "$T/q-limit.md"
   st_run 'quotes: a limit marked (0.1.5) quotes what the record does not say' 1 'a limit marked (0.1.5): not in deploy/BACKUP-VERIFY-RUN.md' "BETA=$T/q-limit.md" "R=$R" -- quotes
+  t_after '- (0.1.5) Native amd64 timing of the checksum step' '- (0.1.5) A limit of another record. Why: a case of the selftest. Record: deploy/MIGRATION-RESTORE-RUN.md, *Not tested*: "NO SUCH PHRASE 34 in deploy/BACKUP-VERIFY-RUN.md."' < "$T/good.md" > "$T/q-other.md"
+  st_run 'quotes: a limit marked (0.1.5) of another record is left to the gate of phase 34' 0 'ok: quotes' "BETA=$T/q-other.md" "R=$R" -- quotes
+  t_drop_line '- (0.1.5) Native amd64 timing of the checksum step' < "$T/good.md" > "$T/q-five.md"
+  st_run 'quotes: fewer than six limits marked (0.1.5) name the record' 1 'quotes: 5 limits marked (0.1.5) name Record: deploy/BACKUP-VERIFY-RUN.md, want at least 6' "BETA=$T/q-five.md" "R=$R" -- quotes
   # ledger
   st_run 'ledger: control, the page as it is' 0 'ok: ledger' "BETA=$T/good.md" -- ledger
   t_after '### The nightly backup and a restore' "- $LIMIT_1: a flipped byte inside a data page passes both integrity readers. Why: kept." < "$T/good.md" > "$T/l-bullet.md"
@@ -352,7 +425,7 @@ selftest() {
   st_run 'record: E is an empty directory, so the rule is skipped and not passed' 0 'SKIP record: no scratch files under E' "E=$T/empty-e" "R=$R" -- record
   st_run 'record: a skipped rule is counted as skipped in the last line' 0 '32-CHECK OK (0 rules, 1 skipped)' "E=$T/empty-e" "R=$R" -- record
   if [ "$ST_K" = 0 ]; then
-    echo "SELFTEST OK ($ST_N cases)"
+    if [ "$ST_S" = 0 ]; then echo "SELFTEST OK ($ST_N cases)"; else echo "SELFTEST OK ($ST_N cases, $ST_S skipped)"; fi
     return 0
   fi
   echo "SELFTEST FAILED ($ST_K of $ST_N)"

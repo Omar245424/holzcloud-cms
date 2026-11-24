@@ -805,7 +805,7 @@ and commit that now run; the second reads the journal since that start:
 
 ```bash
 curl -fsS --retry 30 --retry-connrefused --retry-delay 1 http://127.0.0.1:8080/readyz | jq '{status, version, commit, integrity}'
-sudo journalctl -u holzcloud --since "$(systemctl show -p ActiveEnterTimestamp --value holzcloud)" -o cat | grep -E 'pre-upgrade snapshot written|migration applied' || echo 'no migration, no snapshot'
+sudo journalctl -u holzcloud --since "$(systemctl show -p ActiveEnterTimestamp --value holzcloud)" -o cat | grep -E 'pre-upgrade snapshot (written|kept)|migration applied' || echo 'no migration, no snapshot'
 ```
 
 `version` and `commit` must be the new build's, and `status` and `integrity` must
@@ -813,10 +813,13 @@ read `ok`. While the first line waits, `curl` prints `Failed to connect` for eac
 attempt that finds nothing listening yet; those are the retries, not a failure.
 Migrations run automatically on startup: the new binary applies any
 pending schema changes. When there are any, the journal shows one line
-`pre-upgrade snapshot written`, with the `path` of the file, and then one line
-`migration applied` per migration. An update across two migrations showed exactly
+`pre-upgrade snapshot written`, with the `path` of the file and the migration
+`level` it holds, and then one line `migration applied` per migration. An update across two migrations showed exactly
 that: the snapshot line, then `migration applied` for version 59 and for 60, and
-the schema went from 58 to 60. No such lines means that no migration was
+the schema went from 58 to 60. When an update fails, systemd restarts the
+service and each restart logs `pre-upgrade snapshot kept` with the `path` of the
+snapshot written before the first attempt, so after a failed update the line
+shows that, and the way back is *Rolling back* below. No such lines means that no migration was
 pending, and in that case there is no snapshot either: the line then prints
 `no migration, no snapshot` (without that, `grep` finds nothing and the line ends
 with a failure status, which is not a failure of the update).
@@ -830,12 +833,20 @@ What the service does before it migrates, as observed:
   the *Build* line stamps the version: a binary built without it calls itself
   `dev`, and so does the file.
 - It holds the **old** schema, because it is written before the first migration
-  runs, and it is verified before the migrations start.
+  runs, and it is verified before the migrations start. The journal line
+  `pre-upgrade snapshot written` names its `path` and the migration `level` it
+  holds.
 - It is written only when migrations are pending. It covers the database only: media,
   templates, plugins, language files and the logo are not in it, which is one more
   reason for the backup of step 1.
-- Only the newest five are kept; older ones are removed at the next update that
-  writes one. Copy one out of the data directory if you want to keep it longer.
+- Only the newest five are kept; older ones are removed at the next update that writes one.
+  Copy one out of the data directory if you want to keep it longer.
+- When the migrations fail, the service ends with status 1 and systemd restarts it,
+  and from 0.1.5 those restarts write no further snapshot: each of them logs
+  `pre-upgrade snapshot kept` with the same `path`, and every `restore with:` line
+  names that same file, the one written before the first attempt. The file
+  `pre-upgrade.pending` in the data directory names that snapshot and its level until
+  a migration has run through; the service removes it then. Leave it alone.
 - It is readable by the service user only (mode `600`, owner `holzcloud`). It holds
   password hashes, like the database itself.
 - Use the `path` of the journal line, not a name you guessed.
@@ -889,11 +900,27 @@ snapshot. The sign is the journal line `pre-upgrade snapshot written` at the upd
 (the terminal shows it instead when a subcommand of the new binary migrated first)
 and a file named `pre-upgrade-VERSION-TIMESTAMP.sqlite` in the data directory, with
 the version you updated to in its name and the time of that journal line. Run the
-first line of the first block on its own and read it before you go on: if it lists
-no such file, use the second block. The restore line takes the newest snapshot by
-modification time, which is wrong when this update wrote none: an older file then
-belongs to an older update, and one a few kilobytes in size is the snapshot of a
-first start, an empty database.
+first two lines of the first block on their own and read them before you go on: the
+first lists the snapshots with their time and size, the second prints the migration
+level each of them holds. If they list no such file, use the second block. The
+restore line takes the newest snapshot by modification time, which is wrong when this
+update wrote none: an older file then belongs to an older update, and one a few
+kilobytes in size is the snapshot of a first start, an empty database.
+
+The right snapshot is the one this update wrote before its first migration. It holds
+the migration level of the old binary, lower than the level of the migrated database
+(the `db_level` of the refusal line, or the last `migration applied` of the update),
+and the journal line `pre-upgrade snapshot written` names it with that `level`. From
+0.1.5 it is the newest file even after a failed migration, because the
+restarts after a failed migration write no further snapshot: each of them logs
+`pre-upgrade snapshot kept` with the same `path`. So the restore line takes it, and
+the journal's `restore with:` line names it too. When the very first migration of the
+update fails, the database stays at the old level, and each restart writes one more
+snapshot of that same level: every one of them is a way back, but together they can
+push the snapshots of older updates out of the newest five. A newest file whose level
+equals that of the migrated database is not the way back (a binary before 0.1.5 wrote
+one at each restart after a failed migration): then copy the right file by its name
+instead of using the restore line.
 
 **1. The update wrote a snapshot.** Stop the service, put the old binary back,
 remove the write-ahead files (`-wal` and `-shm`) that belong to the database being
@@ -902,6 +929,7 @@ reset the start counter and start:
 
 ```bash
 ls -l /opt/holzcloud/data/pre-upgrade-*.sqlite
+for f in /opt/holzcloud/data/pre-upgrade-*.sqlite; do echo "$f level $(sudo -u holzcloud sqlite3 "file:$f?immutable=1" 'select coalesce(max(version_id), 0) from goose_db_version where is_applied = 1')"; done
 sudo systemctl stop holzcloud
 sudo cp -p /opt/holzcloud/holzcloud.prev /opt/holzcloud/holzcloud
 sudo rm -f /opt/holzcloud/data/holzcloud.sqlite-wal /opt/holzcloud/data/holzcloud.sqlite-shm
@@ -910,7 +938,7 @@ sudo -u holzcloud cp "$(ls -t /opt/holzcloud/data/pre-upgrade-*.sqlite | head -n
 sudo systemctl reset-failed holzcloud
 sudo systemctl start holzcloud
 curl -fsS --retry 30 --retry-connrefused --retry-delay 1 http://127.0.0.1:8080/readyz | jq '{status, version, commit, integrity}'
-sudo journalctl -u holzcloud --since "$(systemctl show -p ActiveEnterTimestamp --value holzcloud)" -o cat | grep -E 'pre-upgrade snapshot written|migration applied' || echo 'no migration, no snapshot'
+sudo journalctl -u holzcloud --since "$(systemctl show -p ActiveEnterTimestamp --value holzcloud)" -o cat | grep -E 'pre-upgrade snapshot (written|kept)|migration applied' || echo 'no migration, no snapshot'
 ```
 
 `version` must be the old build's, `status` and `integrity` must read `ok`, and the
@@ -1132,6 +1160,10 @@ exact restore command if they fail:
 systemctl stop holzcloud && cp /opt/holzcloud/data/pre-upgrade-<version>-<ts>.sqlite \
   /opt/holzcloud/data/holzcloud.sqlite && systemctl start holzcloud
 ```
+
+The snapshot it names is the one written before the first attempt, also on every
+restart: from 0.1.5 a restart after a failed migration writes no further snapshot
+and logs `pre-upgrade snapshot kept` with that same path instead.
 
 That command restores the data only, and after a failed migration the binary that
 runs is the NEW one, so the restarted service meets the same migration again. Go
