@@ -4,7 +4,7 @@
 #
 #   bash deploy/test/34-check.sh RULE...
 #
-# RULE is one of frozen, quotes, coverage, ledger, nojs, record, all, selftest:
+# RULE is one of frozen, quotes, coverage, ledger, nojs, record, stable, all, selftest:
 #
 # frozen    the evidence still holds: each record of RECORDS has exactly one
 #           `Evidence commit:` line naming a commit of ROOT, and between that commit and
@@ -51,7 +51,20 @@
 #           which runs the record-check of deploy/test/backup-verify.sh. Every one must end
 #           OK. When a scratch root is missing the rule prints `SKIP record: …` and is
 #           counted as skipped in the last line, never as passed.
-# all       frozen, quotes, coverage, ledger, nojs, record, in that order.
+# stable    docs/stable.md (STABLE) says what 1.0 will promise and what is missing: its first
+#           line is STABLE_TITLE; its level-two headings are exactly the five areas of
+#           STABLE_AREAS and then those of STABLE_REST, in that order; each area has
+#           `### What 1.0 promises` with at least one line of prose, then
+#           `### What is still missing` with at least one `- [ ] ` item, nothing in it but
+#           `- [ ] ` items, and no `- [x]`; every `- [ ] ` item names a requirement ID
+#           (`[A-Z]{2,4}-[0-9]{2}`), an owner step (`OS-[0-9]+`) or a backticked path with a
+#           slash, so that no item stands on nothing; `## Outside the 1.0 promise` names
+#           `plugin ABI`, `SDK` and `MCP`; every `deploy/….md` and `docs/….md` path the
+#           page names exists in ROOT; and the README (README) links `docs/stable.md`.
+#           The page is a promise not yet given, written in the future tense, and what it
+#           states as present is cited by these checks only as far as a path can be: the
+#           rule cannot read a sentence, and the review against D-01 to D-05 does.
+# all       frozen, quotes, coverage, ledger, nojs, record, stable, in that order.
 # selftest  one negative case per rule, each beside a control that passes, on copies in a
 #           temporary directory; the real files are never written.
 #
@@ -77,6 +90,11 @@
 #            default $ROOT/deploy/test/out
 #   PHASE_FILES  the files the phase changed, one per line; default the list below. Only
 #            the selftest sets it.
+#   STABLE   the page of what 1.0 will promise; default $ROOT/docs/stable.md
+#   README   the file that must link it; default $ROOT/README.md
+#   STABLE_AREAS, STABLE_REST  the level-two headings of the page, one per line: the areas
+#            that carry a promise and a checklist, and the sections after them; defaults
+#            below.
 #   JS_ALLOWED  the tracked JavaScript allowed (nojs only); default
 #            cmd/holzcloud/assets/htmx.min.js. Only the selftest sets it to empty.
 #
@@ -96,6 +114,11 @@ ME="$HERE/$(basename "$0")"
 REC_ROOT=${REC_ROOT:-$ROOT}
 BETA=${BETA:-$ROOT/docs/beta.md}
 JS_ALLOWED=${JS_ALLOWED-cmd/holzcloud/assets/htmx.min.js}
+STABLE=${STABLE:-$ROOT/docs/stable.md}
+README=${README:-$ROOT/README.md}
+STABLE_TITLE='# What 1.0 will promise, and what it still lacks'
+STABLE_AREAS=${STABLE_AREAS-"Template contract"}
+STABLE_REST=${STABLE_REST-""}
 E=${E:-$ROOT/deploy/test/out}
 E32=${E32:-$ROOT/deploy/test/out}
 BASE=${BASE:-}
@@ -106,7 +129,8 @@ BINARY_SRC="cmd internal go.mod go.sum changelog.go CHANGELOG.md"
 
 # Every file phase 34 changed, sorted as `sort` prints them under LC_ALL=C. The frozen rule
 # compares the real change BASE...TIP with it, name for name.
-PHASE_FILES=${PHASE_FILES:-"cmd/holzcloud/cli.go
+PHASE_FILES=${PHASE_FILES:-"README.md
+cmd/holzcloud/cli.go
 cmd/holzcloud/deploy_docs_test.go
 cmd/holzcloud/main.go
 cmd/holzcloud/schema_guard_test.go
@@ -122,6 +146,7 @@ deploy/test/README.md
 deploy/test/browser-verify.sh
 deploy/test/upgrade-verify.sh
 docs/beta.md
+docs/stable.md
 internal/db/db.go
 internal/db/partial_migration_test.go
 internal/plugin/runtime.go
@@ -356,6 +381,75 @@ rule_nojs() {
   ok "nojs: the tracked JavaScript is exactly $JS_ALLOWED"
 }
 
+rule_stable() {
+  need "$STABLE" || return 2
+  need "$README" || return 2
+  local want got h area sec prom miss items item n nitems=0 narea=0 before paths p np=0 out
+  [ "$(head -n 1 "$STABLE")" = "$STABLE_TITLE" ] || fail "stable: the first line of $STABLE is not '$STABLE_TITLE'"
+  want=$(printf '%s\n%s\n' "$STABLE_AREAS" "$STABLE_REST" | grep .)
+  got=$(awk '/^```/ { f = !f; next } !f && /^## / { sub(/^## /, ""); print }' "$STABLE")
+  before=$RULE_FAIL
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    printf '%s\n' "$got" | grep -qxF -- "$h" || fail "stable: the heading '## $h' is missing from $STABLE"
+  done <<EOF_W
+$want
+EOF_W
+  if [ "$RULE_FAIL" = "$before" ] && [ "$got" != "$want" ]; then
+    fail "stable: the level-two headings are not exactly these, in this order: $(printf '%s' "$want" | tr '\n' '|')"
+  fi
+  while IFS= read -r area; do
+    [ -n "$area" ] || continue
+    sec=$(section2 "^## $area\$" < "$STABLE")
+    if [ -z "$sec" ]; then continue; fi
+    narea=$((narea + 1))
+    n=$(printf '%s\n' "$sec" | grep -c '^### What 1\.0 promises$')
+    [ "$n" = 1 ] || { fail "stable: '## $area' has $n headings '### What 1.0 promises', want exactly one"; continue; }
+    n=$(printf '%s\n' "$sec" | grep -c '^### What is still missing$')
+    [ "$n" = 1 ] || { fail "stable: '## $area' has $n headings '### What is still missing', want exactly one"; continue; }
+    if [ "$(printf '%s\n' "$sec" | grep -n '^### What 1\.0 promises$' | cut -d: -f1)" -gt "$(printf '%s\n' "$sec" | grep -n '^### What is still missing$' | cut -d: -f1)" ]; then
+      fail "stable: '## $area' puts '### What is still missing' before '### What 1.0 promises'"
+      continue
+    fi
+    prom=$(printf '%s\n' "$sec" | section3 '^### What 1\.0 promises$' | grep -c .)
+    [ "$prom" -gt 0 ] || fail "stable: '## $area': nothing is written under '### What 1.0 promises'"
+    miss=$(printf '%s\n' "$sec" | section3 '^### What is still missing$' | grep .)
+    if printf '%s\n' "$miss" | grep -qE '^- \[[xX]\]'; then fail "stable: '## $area' has a checked item; what is missing is not done until a record shows it"; fi
+    items=$(printf '%s\n' "$miss" | grep '^- \[ \] ')
+    if [ -z "$items" ]; then fail "stable: '## $area' has no '- [ ] ' item under '### What is still missing'"; continue; fi
+    out=$(printf '%s\n' "$miss" | grep -v '^- \[ \] ')
+    [ -z "$out" ] || fail "stable: '## $area': a line under '### What is still missing' is not a '- [ ] ' item: $(short "$out")"
+    while IFS= read -r item; do
+      [ -n "$item" ] || continue
+      nitems=$((nitems + 1))
+      printf '%s' "$item" | grep -qE '(^|[^A-Za-z0-9-])[A-Z]{2,4}-[0-9]{2}([^0-9]|$)|(^|[^A-Za-z0-9-])OS-[0-9]+([^0-9]|$)|`[A-Za-z0-9._-]+/[^` ]*`' \
+        || fail "stable: '## $area': an item names no requirement, owner step or path: $(short "$item")"
+    done <<EOF_I
+$items
+EOF_I
+  done <<EOF_A
+$STABLE_AREAS
+EOF_A
+  case "$STABLE_REST" in
+    *'Outside the 1.0 promise'*)
+      sec=$(section2 '^## Outside the 1\.0 promise$' < "$STABLE")
+      for h in 'plugin ABI' 'SDK' 'MCP'; do
+        printf '%s\n' "$sec" | grep -qF -- "$h" || fail "stable: '## Outside the 1.0 promise' does not name '$h'"
+      done
+      ;;
+  esac
+  paths=$(grep -oE '(deploy|docs)/[A-Za-z0-9._/-]*\.md' "$STABLE" | sort -u)
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    np=$((np + 1))
+    [ -f "$ROOT/$p" ] || fail "stable: the page names $p, which is not a file of $ROOT"
+  done <<EOF_P
+$paths
+EOF_P
+  grep -qF '](docs/stable.md)' "$README" || fail "stable: $README does not link docs/stable.md"
+  [ "$RULE_FAIL" = 0 ] && ok "stable: $narea areas with a promise and a checklist, $nitems unchecked items that each name a source, $np documents named that exist, and the README links docs/stable.md"
+}
+
 # run_ok DESC PREFIX CMD... : run CMD in ROOT; its last line must begin with PREFIX.
 run_ok() {
   local desc="$1" want="$2" out last
@@ -473,6 +567,23 @@ selftest() {
   # nojs
   st_run 'nojs: control, the repository as it is' 0 'ok: nojs' -- nojs
   st_run 'nojs: no JavaScript allowed, so the htmx file is one too many' 1 'nojs: the tracked JavaScript is not exactly' "JS_ALLOWED=" -- nojs
+  # stable
+  cp "$STABLE" "$T/stable-good.md" 2> /dev/null || : > "$T/stable-good.md"
+  st_run 'stable: control, the page and the README as they are' 0 'ok: stable' "STABLE=$T/stable-good.md" -- stable
+  grep -vxF '## Template contract' "$T/stable-good.md" > "$T/s-noheading.md"
+  st_run 'stable: a copy without the heading ## Template contract' 1 "stable: the heading '## Template contract' is missing" "STABLE=$T/s-noheading.md" -- stable
+  grep -v '^- \[ \] ' "$T/stable-good.md" > "$T/s-noitem.md"
+  st_run 'stable: a copy in which no area has a - [ ] item' 1 "stable: '## Template contract' has no '- [ ] ' item" "STABLE=$T/s-noitem.md" -- stable
+  awk '!done && /^- \[ \] / { sub(/^- \[ \] /, "- [x] "); done = 1 } { print }' "$T/stable-good.md" > "$T/s-checked.md"
+  st_run 'stable: a copy with a - [x] item' 1 "stable: '## Template contract' has a checked item" "STABLE=$T/s-checked.md" -- stable
+  t_after '### What is still missing' '- [ ] Something is missing and says nothing about what it waits on.' < "$T/stable-good.md" > "$T/s-nosource.md"
+  st_run 'stable: an item that names no requirement, owner step or path' 1 "stable: '## Template contract': an item names no requirement, owner step or path: - [ ] Something is missing and says nothing" "STABLE=$T/s-nosource.md" -- stable
+  sed 's#docs/beta\.md#docs/nosuch.md#g' "$T/stable-good.md" > "$T/s-nopath.md"
+  st_run 'stable: a copy that names a document that does not exist' 1 'stable: the page names docs/nosuch.md, which is not a file of' "STABLE=$T/s-nopath.md" -- stable
+  sed 's#^\# What 1\.0 will promise, and what it still lacks$#\# Stable#' "$T/stable-good.md" > "$T/s-title.md"
+  st_run 'stable: a copy with another title' 1 "stable: the first line of $T/s-title.md is not" "STABLE=$T/s-title.md" -- stable
+  grep -vF 'docs/stable.md' "$README" > "$T/readme-nolink.md"
+  st_run 'stable: a README without the link' 1 'does not link docs/stable.md' "README=$T/readme-nolink.md" -- stable
   # record
   mkdir -p "$T/empty-e" "$T/bad-e/mac-t34-uat"
   : > "$T/bad-e/amd64-t34-summary.txt"
@@ -489,7 +600,7 @@ selftest() {
 
 # ----------------------------------------------------------------- main ----
 
-usage() { echo "usage: 34-check.sh frozen|quotes|coverage|ledger|nojs|record|all ... | selftest" >&2; exit 2; }
+usage() { echo "usage: 34-check.sh frozen|quotes|coverage|ledger|nojs|record|stable|all ... | selftest" >&2; exit 2; }
 [ "$#" -gt 0 ] || usage
 if [ "$1" = selftest ]; then
   [ "$#" = 1 ] || usage
@@ -500,8 +611,8 @@ fi
 RULES=""
 for a in "$@"; do
   case "$a" in
-    frozen | quotes | coverage | ledger | nojs | record) RULES="$RULES $a" ;;
-    all) RULES="$RULES frozen quotes coverage ledger nojs record" ;;
+    frozen | quotes | coverage | ledger | nojs | record | stable) RULES="$RULES $a" ;;
+    all) RULES="$RULES frozen quotes coverage ledger nojs record stable" ;;
     *) usage ;;
   esac
 done
