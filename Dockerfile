@@ -57,9 +57,20 @@ COPY --from=build --chown=65532:65532 /data /data
 # all arrive over the container's address — on the loopback they would find
 # nobody. The container started, reported nothing and answered no request. Held
 # by cmd/holzcloud/dockerfile_test.go.
+#
+# HOLZCLOUD_TRUSTED_PROXIES=172.16.0.0/12 covers Docker's default and compose
+# bridge subnets so X-Forwarded-* headers from a host reverse proxy (Caddy/Nginx)
+# are honored without extra flags. Override it in Kubernetes if your Ingress
+# controller sits in 10.0.0.0/8.
+#
+# HOLZCLOUD_SECURE and HOLZCLOUD_SECRET_KEY are intentionally left unset here:
+# setting HOLZCLOUD_SECURE=true in the image would break plain HTTP local runs
+# (Secure cookies wouldn't be sent over http://), and secrets must never be
+# baked into image layers.
 ENV HOLZCLOUD_DATA_DIR=/data \
     HOLZCLOUD_PORT=8080 \
-    HOLZCLOUD_LISTEN=0.0.0.0
+    HOLZCLOUD_LISTEN=0.0.0.0 \
+    HOLZCLOUD_TRUSTED_PROXIES=172.16.0.0/12
 
 EXPOSE 8080
 
