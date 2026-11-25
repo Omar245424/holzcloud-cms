@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 # An image for the cluster. Two stages, and the second one is nearly empty.
 #
 # The program is a single binary without CGO: templates, assets, migrations and
@@ -8,14 +10,15 @@
 #
 # It is built for linux/amd64, like the rest of the project since 1.4.
 
-FROM golang:1.26.11 AS build
+FROM golang:1.26.11-bookworm AS build
 
 WORKDIR /src
 
 # The module list first, then the source: that way the layer with the
 # dependencies stays in the cache as long as go.mod and go.sum do not change.
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
 COPY . .
 
@@ -26,13 +29,21 @@ COPY . .
 ARG VERSION=dev
 ARG COMMIT=unknown
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
     -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT}" \
     -o /holzcloud ./cmd/holzcloud
+
+# Pre-create the /data mount point owned by 65532:65532 (nonroot) so the
+# directory exists with the right permissions even before or if a volume is
+# mounted in local Docker or Kubernetes.
+RUN install -d -m 0755 -o 65532 -g 65532 /data
 
 FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=build /holzcloud /holzcloud
+COPY --from=build --chown=65532:65532 /data /data
 
 # The data directory is mounted at run time and deliberately not declared as a
 # VOLUME here: a VOLUME with no mount point silently creates a nameless volume
